@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.git
+.env
+build/
+*.spec
+ccuage_export.py
+ccuage_export.spec
+requirements.txt
+.venv
+venv

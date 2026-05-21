@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Code 사용량</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+</head>
+<body>
+  <header class="header">
+    <h1>Claude Code 사용량</h1>
+  </header>
+
+  <nav class="tab-bar" role="tablist">
+    <button type="button" class="tab active" data-view="history" role="tab">기록·차트</button>
+    <button type="button" class="tab" data-view="realtime" role="tab">실시간 (오늘)</button>
+  </nav>
+
+  <div id="toast" class="toast hidden" aria-live="polite"></div>
+  <div id="banner" class="banner hidden"></div>
+
+  <!-- 기록 -->
+  <section id="view-history" class="view active">
+    <aside class="sidebar">
+      <h2>설정</h2>
+      <label class="check"><input type="checkbox" id="use-since" checked /> 시작일</label>
+      <input type="date" id="since-date" />
+      <label class="check"><input type="checkbox" id="use-until" /> 종료일</label>
+      <input type="date" id="until-date" disabled />
+      <label>자동 갱신 (초)</label>
+      <select id="history-ttl">
+        <option value="30">30초</option>
+        <option value="60" selected>60초</option>
+        <option value="120">120초</option>
+        <option value="300">300초</option>
+      </select>
+      <button type="button" class="btn primary" id="btn-history-refresh">지금 새로고침</button>
+    </aside>
+    <main class="content">
+      <p id="history-meta" class="meta">—</p>
+      <div id="history-metrics" class="metrics"></div>
+      <div class="sub-tabs">
+        <button type="button" class="sub-tab active" data-sub="trend">추이</button>
+        <button type="button" class="sub-tab" data-sub="table">일별 표</button>
+        <button type="button" class="sub-tab" data-sub="models">모델별</button>
+      </div>
+      <div id="history-sub-trend" class="sub-panel active">
+        <h3>비용 · 토큰</h3>
+        <div id="chart-cost-tokens" class="chart"></div>
+        <h3>Input / Output</h3>
+        <div id="chart-io" class="chart"></div>
+      </div>
+      <div id="history-sub-table" class="sub-panel">
+        <div class="table-wrap" id="history-table"></div>
+      </div>
+      <div id="history-sub-models" class="sub-panel">
+        <div class="table-wrap" id="models-detail-table"></div>
+        <h3>모델별 누적 비용</h3>
+        <div id="chart-model-cost" class="chart"></div>
+      </div>
+    </main>
+  </section>
+
+  <!-- 실시간 -->
+  <section id="view-realtime" class="view">
+    <aside class="sidebar">
+      <h2>실시간</h2>
+      <button type="button" class="btn primary" id="btn-realtime-refresh">지금 새로고침</button>
+    </aside>
+    <main class="content">
+      <h2 id="rt-title">오늘</h2>
+      <p id="realtime-meta" class="meta">—</p>
+      <div id="realtime-metrics" class="metrics"></div>
+      <div id="active-block" class="card hidden"></div>
+      <h3>세션별 (오늘)</h3>
+      <div class="table-wrap" id="session-table"></div>
+      <div id="chart-rt-sessions" class="chart"></div>
+      <h3>모델별 (오늘)</h3>
+      <div class="table-wrap" id="rt-model-table"></div>
+    </main>
+  </section>
+
+  <script>
+    window.APP_CONFIG = {
+      apiBaseUrl: {{ api_base_url | tojson }},
+      historyTtlDefault: {{ history_ttl_default }},
+      realtimeTtlDefault: {{ realtime_ttl_default }},
+      pollMs: 2000,
+      realtimeIntervalMs: 60000,
+    };
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

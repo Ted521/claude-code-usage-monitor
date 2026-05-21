@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+build/
+dist/
+*.spec
+# Streamlit / 로컬 빌드 (비공개)
+ccuage_export.py
+ccuage_export.spec
+requirements.txt
+*.xlsx
