@@ -193,6 +193,27 @@ body {
   display: block;
 }
 
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.chart-controls label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.chart-controls select {
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 0.85rem;
+}
+
 .chart {
   width: 100%;
   min-height: 400px;
@@ -262,4 +283,18 @@ table.data th {
 h3 {
   margin: 1rem 0 0.5rem;
   font-size: 1rem;
+}
+
+.collapsible {
+  margin-top: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 1rem 1rem;
+}
+
+.collapsible summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.5rem 0;
 }

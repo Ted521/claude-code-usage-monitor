@@ -12,3 +12,5 @@ ccuage_export.py
 ccuage_export.spec
 requirements.txt
 *.xlsx
+# 스냅샷 데이터만 제외 (폴더·.gitkeep은 유지)
+data/timeline/*.jsonl

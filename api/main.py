@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,8 +17,18 @@ from services.ccusage_client import (
     today_yyyymmdd,
 )
 from services.job_cache import usage_cache
+from services.minute_scheduler import start_minute_scheduler, stop_minute_scheduler
+from services.timeline_store import timeline_store
 
-app = FastAPI(title="Claude Usage API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    start_minute_scheduler()
+    yield
+    stop_minute_scheduler()
+
+
+app = FastAPI(title="Claude Usage API", version="1.0.0", lifespan=lifespan)
 
 _cors = os.getenv("CORS_ORIGINS", "*")
 app.add_middleware(
@@ -77,29 +89,40 @@ def get_realtime(
 ) -> dict[str, Any]:
     key = f"realtime:{today_yyyymmdd()}"
 
+    today = today_yyyymmdd()
+
     def fetcher() -> tuple[dict, dict | None, dict]:
         bundle = fetch_realtime_bundle()
         sessions = bundle.get("sessions", {}).get("session") or []
+        daily = bundle.get("daily") or {}
+        totals = daily.get("totals") or {}
+        if totals:
+            timeline_store.append(today, totals)
+        timeline = timeline_store.build_timeline(today)
         return (
             bundle,
-            {"sessions": charts.session_tokens_bars(sessions)},
+            {"model_cost": charts.model_cost_bars(daily.get("daily") or [])},
             {
-                "today": today_yyyymmdd(),
+                "today": today,
                 "session_table": _session_table_rows(sessions),
-                "model_rows": charts.model_detail_rows(
-                    bundle.get("daily", {}).get("daily") or []
-                ),
+                "model_rows": charts.model_detail_rows(daily.get("daily") or []),
+                "timeline": timeline,
             },
         )
 
     snap = usage_cache.ensure(key, fetcher, ttl_sec=ttl, force=force)
     bundle = snap.get("data") or {}
     daily = bundle.get("daily") or {}
+    day = (snap.get("extra") or {}).get("today") or today
+    # 캐시가 loading이어도 디스크 스냅샷으로 차트 즉시 표시
+    timeline = timeline_store.build_timeline(day)
+    snapshots = timeline_store.read_day(day)
+    last_ts = snapshots[-1].get("ts") if snapshots else None
     return {
         "status": snap["status"],
         "updated_at": snap["updated_at"],
         "error": snap["error"],
-        "today": (snap.get("extra") or {}).get("today"),
+        "today": day,
         "totals": daily.get("totals"),
         "daily": daily.get("daily"),
         "blocks": bundle.get("blocks"),
@@ -107,6 +130,14 @@ def get_realtime(
         "charts": snap.get("charts"),
         "session_table": (snap.get("extra") or {}).get("session_table"),
         "model_rows": (snap.get("extra") or {}).get("model_rows"),
+        "timeline": timeline,
+        "timeline_meta": {
+            "snapshot_lines": len(snapshots),
+            "last_snapshot_at": last_ts,
+            "recent_5m_points": len(
+                (timeline.get("recent_5m_incremental") or [])
+            ),
+        },
     }
 
 

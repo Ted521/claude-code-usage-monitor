@@ -73,11 +73,28 @@
       <p id="realtime-meta" class="meta">—</p>
       <div id="realtime-metrics" class="metrics"></div>
       <div id="active-block" class="card hidden"></div>
-      <h3>세션별 (오늘)</h3>
-      <div class="table-wrap" id="session-table"></div>
-      <div id="chart-rt-sessions" class="chart"></div>
+      <h3>오늘 사용 추이</h3>
+      <p class="meta">분 단위 스냅샷을 시간·5분 구간으로 집계합니다. 첫 데이터는 약 1분 후부터 쌓입니다.</p>
+      <div class="chart-controls">
+        <label for="rt-timeline-granularity">구간</label>
+        <select id="rt-timeline-granularity">
+          <option value="hour" selected>시간별 (오늘)</option>
+          <option value="recent_5m">최근 2시간 · 5분</option>
+        </select>
+        <label for="rt-timeline-mode">표시</label>
+        <select id="rt-timeline-mode">
+          <option value="incremental" selected>증분</option>
+          <option value="cumulative">누적</option>
+        </select>
+      </div>
+      <div id="chart-rt-timeline" class="chart"></div>
       <h3>모델별 (오늘)</h3>
       <div class="table-wrap" id="rt-model-table"></div>
+      <div id="chart-rt-model-cost" class="chart"></div>
+      <details class="collapsible">
+        <summary>세션별 (오늘)</summary>
+        <div class="table-wrap" id="session-table"></div>
+      </details>
     </main>
   </section>
 

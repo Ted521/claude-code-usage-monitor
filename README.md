@@ -49,6 +49,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+스냅샷은 `data/timeline/`에 쌓입니다. 재배포 전에 백업하려면 이 폴더만 복사하면 됩니다.
+
 4. 접속
 
 - 대시보드: http://localhost:5000 (기본 `WEB_PORT`)
@@ -89,6 +91,25 @@ cd web && python app.py
 | `API_BASE_URL` | 미설정 시 `http://localhost:<API_PORT>` 자동 | — |
 | `HISTORY_TTL_SEC` | 기록 API 캐시 TTL(초) | `60` |
 | `REALTIME_TTL_SEC` | 실시간 API 캐시 TTL(초) | `60` |
+| `MINUTE_SNAPSHOT_ENABLED` | 분 단위 오늘 스냅샷 (시간별 차트) | `true` |
+| `MINUTE_SNAPSHOT_INTERVAL_SEC` | 스냅샷 주기(초), 최소 30 | `60` |
+| `USAGE_TIMELINE_HOST_DIR` | 스냅샷 **호스트** 폴더 (Compose 바인드 마운트) | `./data/timeline` |
+| `USAGE_TIMELINE_DIR` | 컨테이너 내부 경로 (보통 변경 불필요) | `/data/timeline` |
+
+### 스냅샷 데이터 보존
+
+분 단위 스냅샷은 **프로젝트의 `data/timeline/`** 에 저장됩니다 (`docker compose` 바인드 마운트).  
+`docker compose up --build`로 이미지를 다시 빌드해도 **파일은 호스트에 남습니다.**
+
+- 저장 파일: `data/timeline/YYYYMMDD.jsonl`
+- 데이터까지 지우려면: `docker compose down` (볼륨 삭제 옵션 `-v`는 named volume용 — 바인드 마운트는 **폴더를 직접 삭제**해야 함)
+- 예전 `usage-timeline` named volume에 데이터가 있었다면, 한 번만 복사:
+
+```bash
+docker run --rm -v claude_check_usage-timeline:/from -v "%cd%/data/timeline":/to alpine cp -a /from/. /to/
+```
+
+(볼륨 이름은 `docker volume ls`로 확인)
 
 ### 포트 변경
 
@@ -109,8 +130,8 @@ cd web && python app.py
 
 ## 화면
 
-- **기록·차트**: 기간별 사용량, 추이 / 일별 표 / 모델별
-- **실시간 (오늘)**: 당일 합계, 활성 세션 블록, 세션·모델별 (탭 선택 시 자동 갱신)
+- **기록·차트**: 기간별 사용량, 추이 / 일별 표 / 모델별 (시작·종료일 변경 시 자동 갱신)
+- **실시간 (오늘)**: 당일 합계, 활성 세션 블록, **모델별**, 분 스냅샷 기반 **증분/누적 선·영역 차트** (시간별 / 최근 2시간·5분, 세션별은 접기)
 
 활성 블록 시간은 API의 UTC 값을 **한국 시간(Asia/Seoul)** 으로 표시합니다.
 
