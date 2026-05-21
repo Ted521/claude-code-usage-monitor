@@ -72,6 +72,35 @@
 
   const pendingPlots = new Map();
 
+  /** Python Plotly to_json() bdata → 일반 배열 (구 API 응답 호환) */
+  function decodePlotlyArray(obj) {
+    if (obj == null || typeof obj !== "object" || !obj.bdata) return obj;
+    const bin = atob(obj.bdata);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const buf = bytes.buffer;
+    if (obj.dtype === "f8") return Array.from(new Float64Array(buf));
+    if (obj.dtype === "f4") return Array.from(new Float32Array(buf));
+    if (obj.dtype === "i4") return Array.from(new Int32Array(buf));
+    return obj;
+  }
+
+  function normalizePlotlyFig(figJson) {
+    if (!figJson?.data) return figJson;
+    return {
+      ...figJson,
+      data: figJson.data.map((trace) => {
+        const t = { ...trace };
+        for (const key of ["x", "y", "z", "values", "labels"]) {
+          if (t[key] && typeof t[key] === "object" && t[key].bdata) {
+            t[key] = decodePlotlyArray(t[key]);
+          }
+        }
+        return t;
+      }),
+    };
+  }
+
   function isVisible(el) {
     if (!el || !el.isConnected) return false;
     if (el.offsetParent === null) return false;
@@ -96,16 +125,22 @@
     }
     pendingPlots.delete(elId);
     el.innerHTML = "";
+    const fig = normalizePlotlyFig(figJson);
     const layout = {
-      ...figJson.layout,
-      template: figJson.layout?.template || "plotly_white",
+      ...fig.layout,
+      template: fig.layout?.template || "plotly_white",
       paper_bgcolor: "#ffffff",
       plot_bgcolor: "#ffffff",
       autosize: true,
     };
-    Plotly.react(el, figJson.data, layout, { responsive: true }).then(() => {
-      if (typeof Plotly !== "undefined") Plotly.Plots.resize(el);
-    });
+    Plotly.react(el, fig.data, layout, { responsive: true })
+      .then(() => {
+        if (typeof Plotly !== "undefined") Plotly.Plots.resize(el);
+      })
+      .catch((err) => {
+        console.error("Plotly render failed:", elId, err);
+        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+      });
   }
 
   function flushPendingPlots(root) {
@@ -227,7 +262,12 @@
     plot("chart-model-cost", charts.model_cost);
     renderTable("history-table", payload.table || []);
     renderTable("models-detail-table", payload.models || []);
+    scheduleFlushPlots();
+  }
+
+  function scheduleFlushPlots() {
     requestAnimationFrame(() => flushPendingPlots());
+    setTimeout(() => flushPendingPlots(), 150);
   }
 
   function applyRealtime(payload) {
@@ -292,7 +332,7 @@
     plot("chart-rt-model-cost", payload.charts?.model_cost);
     renderTable("rt-model-table", payload.model_rows || []);
     renderTable("session-table", payload.session_table || []);
-    requestAnimationFrame(() => flushPendingPlots());
+    scheduleFlushPlots();
   }
 
   function pickTimelineSeries(timeline, granularity, mode) {
@@ -471,11 +511,11 @@
     if (view === "history") {
       fetchHistory();
       scheduleHistory();
-      requestAnimationFrame(() => flushPendingPlots());
+      scheduleFlushPlots();
     } else {
       fetchRealtime();
       scheduleRealtime();
-      requestAnimationFrame(() => flushPendingPlots());
+      scheduleFlushPlots();
     }
   }
 

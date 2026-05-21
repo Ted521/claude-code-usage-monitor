@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
+import base64
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -13,9 +14,37 @@ BAR_BARGAP = 0.45
 BAR_GROUPGAP = 0.12
 CHART_HEIGHT = 520
 
+_DTYPE_MAP = {
+    "f8": np.float64,
+    "f4": np.float32,
+    "i4": np.int32,
+    "u4": np.uint32,
+}
+
+
+def _decode_bdata(obj: dict[str, Any]) -> list[Any]:
+    dtype = _DTYPE_MAP.get(obj.get("dtype", "f8"), np.float64)
+    raw = base64.b64decode(obj["bdata"])
+    return np.frombuffer(raw, dtype=dtype).tolist()
+
+
+def _coerce_plotly_arrays(node: Any) -> Any:
+    """Plotly dict → FastAPI/Plotly.js 호환 (bdata·numpy 제거)."""
+    if isinstance(node, np.ndarray):
+        return node.tolist()
+    if isinstance(node, np.generic):
+        return node.item()
+    if isinstance(node, dict):
+        if "bdata" in node and "dtype" in node:
+            return _decode_bdata(node)
+        return {k: _coerce_plotly_arrays(v) for k, v in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_coerce_plotly_arrays(x) for x in node]
+    return node
+
 
 def _fig_json(fig: go.Figure) -> dict[str, Any]:
-    return json.loads(fig.to_json())
+    return _coerce_plotly_arrays(fig.to_dict())
 
 
 def _apply_x_unified_hover(fig: go.Figure) -> None:
