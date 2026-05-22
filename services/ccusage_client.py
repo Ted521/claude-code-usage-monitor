@@ -52,12 +52,15 @@ def run_ccusage_json(subcommand: str, extra_args: list[str] | None = None) -> di
 
 
 def fetch_daily(since: str | None = None, until: str | None = None) -> dict:
+    from services.local_cost import apply_half_claude_estimate
+
     extra: list[str] = []
     if since:
         extra += ["--since", since]
     if until:
         extra += ["--until", until]
-    return run_ccusage_json("daily", extra or None)
+    data = run_ccusage_json("daily", extra or None)
+    return apply_half_claude_estimate(data)
 
 
 def fetch_blocks_active(since: str | None = None) -> dict:

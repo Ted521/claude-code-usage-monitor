@@ -17,6 +17,7 @@ class CacheEntry:
     error: str | None = None
     charts: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    refreshing: bool = False
 
 
 class UsageJobCache:
@@ -63,7 +64,7 @@ class UsageJobCache:
             stale = (datetime.now() - entry.updated_at).total_seconds() >= ttl_sec
 
         with self._lock:
-            running = entry.status == "loading"
+            running = entry.status == "loading" or entry.refreshing
 
         if (force or stale or entry.status in ("idle", "error")) and not running:
             self._start(key, fetcher)
@@ -77,10 +78,13 @@ class UsageJobCache:
     ) -> None:
         with self._lock:
             entry = self._entries.setdefault(key, CacheEntry(status="idle"))
-            if entry.status == "loading":
+            if entry.refreshing or entry.status == "loading":
                 return
-            entry.status = "loading"
+            entry.refreshing = True
             entry.error = None
+            # 이미 표시 중인 데이터가 있으면 ready 유지(프론트가 loading으로 차트를 비우지 않게)
+            if entry.status != "ready" or entry.data is None:
+                entry.status = "loading"
 
         def worker() -> None:
             try:
@@ -99,6 +103,11 @@ class UsageJobCache:
                     e.status = "error"
                     e.error = str(ex)
                     e.updated_at = datetime.now()
+            finally:
+                with self._lock:
+                    e = self._entries.get(key)
+                    if e is not None:
+                        e.refreshing = False
 
         threading.Thread(target=worker, daemon=True).start()
 

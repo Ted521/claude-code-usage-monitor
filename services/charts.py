@@ -44,7 +44,12 @@ def _coerce_plotly_arrays(node: Any) -> Any:
 
 
 def _fig_json(fig: go.Figure) -> dict[str, Any]:
-    return _coerce_plotly_arrays(fig.to_dict())
+    spec = _coerce_plotly_arrays(fig.to_dict())
+    layout = spec.get("layout")
+    if isinstance(layout, dict) and isinstance(layout.get("template"), dict):
+        # Plotly.js는 Python이 펼친 template dict를 처리하지 못함
+        layout["template"] = "plotly_white"
+    return spec
 
 
 def _apply_x_unified_hover(fig: go.Figure) -> None:
@@ -135,6 +140,18 @@ def input_output_bars(daily: list[dict]) -> dict[str, Any] | None:
     return _fig_json(fig)
 
 
+def _model_breakdown_token_total(mb: dict[str, Any]) -> int:
+    return sum(
+        int(mb.get(k) or 0)
+        for k in (
+            "inputTokens",
+            "outputTokens",
+            "cacheCreationTokens",
+            "cacheReadTokens",
+        )
+    )
+
+
 def model_cost_bars(daily: list[dict]) -> dict[str, Any] | None:
     rows = []
     for d in daily:
@@ -167,6 +184,126 @@ def model_cost_bars(daily: list[dict]) -> dict[str, Any] | None:
     )
     _apply_x_unified_hover(fig)
     return _fig_json(fig)
+
+
+def model_token_bars(daily: list[dict]) -> dict[str, Any] | None:
+    """모델별 토큰 막대 (실시간 탭)."""
+    rows = []
+    for d in daily:
+        for mb in d.get("modelBreakdowns") or []:
+            rows.append(
+                {"모델": mb["modelName"], "토큰": _model_breakdown_token_total(mb)}
+            )
+    if not rows:
+        return None
+    by_model = (
+        pd.DataFrame(rows)
+        .groupby("모델", as_index=False)
+        .agg({"토큰": "sum"})
+        .sort_values("토큰", ascending=False)
+    )
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=by_model["모델"],
+                y=by_model["토큰"],
+                marker_color="#2E75B6",
+            )
+        ]
+    )
+    fig.update_layout(
+        bargap=BAR_BARGAP,
+        xaxis_title="모델",
+        yaxis_title="토큰",
+        yaxis_tickformat=",",
+        height=CHART_HEIGHT,
+        margin=dict(l=80, r=48, t=48, b=80),
+    )
+    fig.update_yaxes(automargin=True)
+    fig.update_xaxes(type="category")
+    return _fig_json(fig)
+
+
+def timeline_usage_chart(
+    points: list[dict[str, Any]], *, incremental: bool
+) -> dict[str, Any] | None:
+    """오늘 사용 추이 (서버 생성 → Plotly.js)."""
+    if not points:
+        return None
+    labels = [p["label"] for p in points]
+    tokens = [p.get("totalTokens") or 0 for p in points]
+    costs = [p.get("totalCost") or 0 for p in points]
+    mode = "lines+markers" if len(points) >= 2 else "markers"
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=tokens,
+            name="토큰 (증분)" if incremental else "토큰 (누적)",
+            mode=mode,
+            line=dict(width=2, color="#2E75B6"),
+            marker=dict(size=8, color="#2E75B6"),
+            fill="tozeroy" if incremental and len(points) >= 2 else "none",
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=costs,
+            name="비용 (증분)" if incremental else "비용 (누적)",
+            mode=mode,
+            line=dict(width=2, color="#ED7D31"),
+            marker=dict(size=8, color="#ED7D31"),
+        ),
+        secondary_y=True,
+    )
+    fig.update_yaxes(
+        title_text="토큰",
+        secondary_y=False,
+        tickformat=",",
+        automargin=True,
+    )
+    fig.update_yaxes(
+        title_text="비용 (USD)",
+        secondary_y=True,
+        tickformat=".4f",
+        automargin=True,
+    )
+    fig.update_layout(
+        hovermode="x unified",
+        hoverdistance=72,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=80, r=72, t=48, b=80),
+        height=CHART_HEIGHT,
+    )
+    fig.update_xaxes(
+        type="category",
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikecolor="rgba(31,78,121,0.55)",
+        spikethickness=1.5,
+        spikedash="solid",
+    )
+    return _fig_json(fig)
+
+
+def realtime_timeline_charts(timeline: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    return {
+        "timeline_hourly_inc": timeline_usage_chart(
+            timeline.get("hourly_incremental") or [], incremental=True
+        ),
+        "timeline_hourly_cum": timeline_usage_chart(
+            timeline.get("hourly_cumulative") or [], incremental=False
+        ),
+        "timeline_recent5m_inc": timeline_usage_chart(
+            timeline.get("recent_5m_incremental") or [], incremental=True
+        ),
+        "timeline_recent_cum": timeline_usage_chart(
+            timeline.get("cumulative_recent") or [], incremental=False
+        ),
+    }
 
 
 def session_tokens_bars(sessions: list[dict]) -> dict[str, Any] | None:
@@ -225,6 +362,11 @@ def model_detail_rows(daily: list[dict]) -> list[dict]:
     rows = []
     for d in daily:
         for mb in d.get("modelBreakdowns") or []:
+            note = (
+                "추정"
+                if mb.get("costEstimated")
+                else ""
+            )
             rows.append(
                 {
                     "날짜": d["period"],
@@ -233,6 +375,7 @@ def model_detail_rows(daily: list[dict]) -> list[dict]:
                     "Output": mb["outputTokens"],
                     "Cache Read": mb["cacheReadTokens"],
                     "비용(USD)": mb["cost"],
+                    "비고": note or "ccusage",
                 }
             )
     return rows

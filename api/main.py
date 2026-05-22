@@ -79,6 +79,7 @@ def get_history(
         "charts": snap.get("charts"),
         "table": (snap.get("extra") or {}).get("table"),
         "models": (snap.get("extra") or {}).get("models"),
+        "local_cost_estimate": data.get("localCostEstimate"),
     }
 
 
@@ -99,9 +100,14 @@ def get_realtime(
         if totals:
             timeline_store.append(today, totals)
         timeline = timeline_store.build_timeline(today)
+        daily_list = daily.get("daily") or []
+        chart_payload = {
+            "model_tokens": charts.model_token_bars(daily_list),
+            **charts.realtime_timeline_charts(timeline),
+        }
         return (
             bundle,
-            {"model_cost": charts.model_cost_bars(daily.get("daily") or [])},
+            chart_payload,
             {
                 "today": today,
                 "session_table": _session_table_rows(sessions),
@@ -118,6 +124,12 @@ def get_realtime(
     timeline = timeline_store.build_timeline(day)
     snapshots = timeline_store.read_day(day)
     last_ts = snapshots[-1].get("ts") if snapshots else None
+    daily_list = daily.get("daily") or []
+    merged_charts = {
+        **(snap.get("charts") or {}),
+        **charts.realtime_timeline_charts(timeline),
+        "model_tokens": charts.model_token_bars(daily_list),
+    }
     return {
         "status": snap["status"],
         "updated_at": snap["updated_at"],
@@ -127,10 +139,11 @@ def get_realtime(
         "daily": daily.get("daily"),
         "blocks": bundle.get("blocks"),
         "sessions": bundle.get("sessions"),
-        "charts": snap.get("charts"),
+        "charts": merged_charts,
         "session_table": (snap.get("extra") or {}).get("session_table"),
         "model_rows": (snap.get("extra") or {}).get("model_rows"),
         "timeline": timeline,
+        "local_cost_estimate": daily.get("localCostEstimate"),
         "timeline_meta": {
             "snapshot_lines": len(snapshots),
             "last_snapshot_at": last_ts,

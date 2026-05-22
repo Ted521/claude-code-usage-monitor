@@ -222,6 +222,12 @@ body {
   border-radius: 8px;
 }
 
+.chart-loading {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--muted, #64748b);
+}
+
 .table-wrap {
   overflow: auto;
   margin-bottom: 1.5rem;

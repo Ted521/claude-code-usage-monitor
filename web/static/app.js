@@ -10,6 +10,7 @@
   let lastRealtimeJson = null;
   let historyForce = false;
   let realtimeForce = false;
+  let historyFetchGen = 0;
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
@@ -108,10 +109,72 @@
     return rect.width > 0 && rect.height > 0;
   }
 
-  function plot(elId, figJson) {
+  function historyChartsPresent(charts) {
+    if (!charts) return false;
+    for (const key of ["cost_tokens", "input_output", "model_cost"]) {
+      const fig = charts[key];
+      if (fig?.data?.length) return true;
+    }
+    return false;
+  }
+
+  /** loading 중 기존 Plotly 차트를 지우지 않음 (빈 응답·늦게 도착한 요청 방지) */
+  function setChartLoading(elId, message) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    if (el.classList?.contains("js-plotly-plot")) return;
+    pendingPlots.delete(elId);
+    el.innerHTML = `<p class="meta chart-loading">${message || "차트 불러오는 중…"}</p>`;
+  }
+
+  /** 기록·차트 탭 — Plotly.react 멈춤 방지 */
+  function plotHistory(elId, figJson) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    pendingPlots.delete(elId);
+    if (!figJson?.data?.length) {
+      if (typeof Plotly !== "undefined") Plotly.purge(el);
+      el.innerHTML = "<p class='meta'>표시할 차트 데이터가 없습니다.</p>";
+      return;
+    }
+    const fig = normalizePlotlyFig(figJson);
+    const layout = buildPlotlyLayout(fig.layout);
+    if (typeof Plotly !== "undefined") Plotly.purge(el);
+    el.innerHTML = "";
+    return Plotly.newPlot(el, fig.data, layout, { responsive: true })
+      .then(() => Plotly.Plots.resize(el))
+      .catch((err) => {
+        console.error("Plotly history chart failed:", elId, err);
+        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+      });
+  }
+
+  function applyHistoryCharts(charts, loading) {
+    const c = charts || {};
+    const specs = [
+      ["chart-cost-tokens", c.cost_tokens],
+      ["chart-io", c.input_output],
+      ["chart-model-cost", c.model_cost],
+    ];
+    for (const [elId, fig] of specs) {
+      if (fig?.data?.length) {
+        plotHistory(elId, fig);
+      } else if (loading) {
+        setChartLoading(elId);
+      } else {
+        plotHistory(elId, null);
+      }
+    }
+  }
+
+  function plot(elId, figJson, options) {
+    const opts = options || {};
     const el = document.getElementById(elId);
     if (!el) return;
     if (!figJson) {
+      if (opts.preserveIfPlotted && el.classList?.contains("js-plotly-plot")) {
+        return;
+      }
       if (typeof Plotly !== "undefined" && el.classList?.contains("js-plotly-plot")) {
         Plotly.purge(el);
       }
@@ -119,20 +182,14 @@
       el.innerHTML = "<p class='meta'>표시할 차트 데이터가 없습니다.</p>";
       return;
     }
-    if (!isVisible(el)) {
+    if (!opts.force && !isVisible(el)) {
       pendingPlots.set(elId, figJson);
       return;
     }
     pendingPlots.delete(elId);
     el.innerHTML = "";
     const fig = normalizePlotlyFig(figJson);
-    const layout = {
-      ...fig.layout,
-      template: fig.layout?.template || "plotly_white",
-      paper_bgcolor: "#ffffff",
-      plot_bgcolor: "#ffffff",
-      autosize: true,
-    };
+    const layout = buildPlotlyLayout(fig.layout);
     Plotly.react(el, fig.data, layout, { responsive: true })
       .then(() => {
         if (typeof Plotly !== "undefined") Plotly.Plots.resize(el);
@@ -143,11 +200,19 @@
       });
   }
 
+  const HISTORY_CHART_IDS = new Set([
+    "chart-cost-tokens",
+    "chart-io",
+    "chart-model-cost",
+  ]);
+
   function flushPendingPlots(root) {
     const scope = root || document;
     for (const [elId, fig] of [...pendingPlots.entries()]) {
       const el = scope.getElementById ? scope.getElementById(elId) : document.getElementById(elId);
-      if (el && isVisible(el)) plot(elId, fig);
+      if (!el || !isVisible(el)) continue;
+      if (HISTORY_CHART_IDS.has(elId)) plotHistory(elId, fig);
+      else plot(elId, fig);
     }
     scope.querySelectorAll?.(".chart.js-plotly-plot").forEach((el) => {
       if (isVisible(el)) Plotly.Plots.resize(el);
@@ -222,9 +287,13 @@
     const prev = lastHistoryJson;
     lastHistoryJson = payload;
 
+    const est = payload.local_cost_estimate;
+    const estNote = est?.enabled
+      ? ` · 로컬 비용 추정 Sonnet×${Math.round((est.ratio ?? 0.5) * 100)}%`
+      : "";
     $("#history-meta").textContent = payload.updated_at
-      ? `마지막 갱신: ${fmtUpdatedAt(payload.updated_at)} · 상태: ${payload.status}`
-      : `상태: ${payload.status}`;
+      ? `마지막 갱신: ${fmtUpdatedAt(payload.updated_at)} · 상태: ${payload.status}${estNote}`
+      : `상태: ${payload.status}${estNote}`;
 
     if (payload.status === "loading") {
       showBanner("🔄 기록 데이터 조회 중… (화면은 계속 사용 가능)");
@@ -232,8 +301,15 @@
       hideBanner();
     }
 
-    if (payload.status === "error" && !payload.daily?.length) {
+    const charts = payload.charts || {};
+    const hasCharts = historyChartsPresent(charts);
+    const loading = payload.status === "loading";
+
+    if (payload.status === "error" && !payload.daily?.length && !hasCharts) {
       $("#history-metrics").innerHTML = `<p class="meta">${payload.error}</p>`;
+      plotHistory("chart-cost-tokens", null);
+      plotHistory("chart-io", null);
+      plotHistory("chart-model-cost", null);
       return;
     }
     if (payload.status === "error" && payload.daily?.length) {
@@ -256,10 +332,7 @@
       { label: "Cache Read", value: fmtNum(totals.cacheReadTokens) },
     ]);
 
-    const charts = payload.charts || {};
-    plot("chart-cost-tokens", charts.cost_tokens);
-    plot("chart-io", charts.input_output);
-    plot("chart-model-cost", charts.model_cost);
+    applyHistoryCharts(charts, loading && !hasCharts);
     renderTable("history-table", payload.table || []);
     renderTable("models-detail-table", payload.models || []);
     scheduleFlushPlots();
@@ -275,8 +348,12 @@
     lastRealtimeJson = payload;
 
     $("#rt-title").textContent = `오늘 · ${payload.today || new Date().toISOString().slice(0, 10)}`;
+    const estRt = payload.local_cost_estimate;
+    const estRtNote = estRt?.enabled
+      ? ` · 로컬 비용 추정 Sonnet×${Math.round((estRt.ratio ?? 0.5) * 100)}%`
+      : "";
     $("#realtime-meta").textContent = payload.updated_at
-      ? `마지막 갱신: ${fmtUpdatedAt(payload.updated_at)}`
+      ? `마지막 갱신: ${fmtUpdatedAt(payload.updated_at)}${estRtNote}`
       : "—";
 
     if (payload.status === "loading") {
@@ -329,126 +406,172 @@
     }
 
     renderRtTimeline();
-    plot("chart-rt-model-cost", payload.charts?.model_cost);
+    plotRtModel("chart-rt-model-tokens", payload.charts?.model_tokens);
     renderTable("rt-model-table", payload.model_rows || []);
     renderTable("session-table", payload.session_table || []);
     scheduleFlushPlots();
   }
 
-  function pickTimelineSeries(timeline, granularity, mode) {
-    if (!timeline) return [];
+  function pickTimelineChart(charts, granularity, mode) {
+    if (!charts) return null;
     if (granularity === "recent_5m") {
       return mode === "incremental"
-        ? timeline.recent_5m_incremental || []
-        : timeline.cumulative_recent || [];
+        ? charts.timeline_recent5m_inc
+        : charts.timeline_recent_cum;
     }
     return mode === "incremental"
-      ? timeline.hourly_incremental || []
-      : timeline.hourly_cumulative || [];
+      ? charts.timeline_hourly_inc
+      : charts.timeline_hourly_cum;
   }
 
-  function buildTimelineFig(points, mode) {
-    if (!points?.length) return null;
-    const x = points.map((p) => p.label);
-    const tokens = points.map((p) => p.totalTokens ?? 0);
-    const costs = points.map((p) => p.totalCost ?? 0);
-    const incremental = mode === "incremental";
-    // 점 1~2개만 있을 때 mode:'lines'만 쓰면 선이 안 보임
-    const traceMode = points.length < 2 ? "markers" : "lines+markers";
-    const markerSize = points.length < 3 ? 10 : 6;
-    return {
-      data: [
-        {
-          x,
-          y: tokens,
-          name: incremental ? "토큰 (증분)" : "토큰 (누적)",
-          type: "scatter",
-          mode: traceMode,
-          marker: { size: markerSize, color: "#2E75B6" },
-          line: { width: 2, color: "#2E75B6" },
-          fill: incremental && points.length >= 2 ? "tozeroy" : "none",
-          fillcolor: incremental ? "rgba(46, 117, 182, 0.22)" : undefined,
-          yaxis: "y",
-        },
-        {
-          x,
-          y: costs,
-          name: incremental ? "비용 (증분)" : "비용 (누적)",
-          type: "scatter",
-          mode: traceMode,
-          marker: { size: markerSize, color: "#ED7D31" },
-          line: {
-            width: 2,
-            color: "#ED7D31",
-            dash: incremental ? "dot" : "solid",
-          },
-          yaxis: "y2",
-        },
-      ],
-      layout: {
-        template: "plotly_white",
-        paper_bgcolor: "#ffffff",
-        plot_bgcolor: "#ffffff",
-        autosize: true,
-        height: 400,
-        hovermode: "x unified",
-        margin: { l: 52, r: 52, t: 48, b: 80 },
-        xaxis: { type: "category" },
-        yaxis: { title: "토큰", tickformat: ",", side: "left" },
-        yaxis2: {
-          title: "비용 (USD)",
-          tickformat: ".4f",
-          overlaying: "y",
-          side: "right",
-        },
-        legend: {
-          orientation: "h",
-          yanchor: "bottom",
-          y: 1.02,
-          xanchor: "right",
-          x: 1,
-        },
-      },
-    };
+  function buildPlotlyLayout(figLayout) {
+    const raw = figLayout || {};
+    const layout = { ...raw };
+    if (typeof layout.template === "object") {
+      delete layout.template;
+    }
+    layout.template =
+      typeof layout.template === "string" ? layout.template : "plotly_white";
+    layout.paper_bgcolor = "#ffffff";
+    layout.plot_bgcolor = "#ffffff";
+    layout.autosize = true;
+    return layout;
+  }
+
+  function buildRtTimelineLayout(figLayout) {
+    const layout = buildPlotlyLayout(figLayout);
+    if (layout.margin && typeof layout.margin === "object") {
+      layout.margin.l = Math.max(layout.margin.l || 0, 80);
+      layout.margin.r = Math.max(layout.margin.r || 0, 72);
+    } else {
+      layout.margin = { l: 80, r: 72, t: 48, b: 80 };
+    }
+    if (layout.yaxis && typeof layout.yaxis === "object") {
+      layout.yaxis.automargin = true;
+    }
+    if (layout.yaxis2 && typeof layout.yaxis2 === "object") {
+      layout.yaxis2.automargin = true;
+    }
+    return layout;
+  }
+
+  /** 실시간 모델별 막대 — react 멈춤 방지 */
+  function plotRtModel(elId, figJson) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    pendingPlots.delete(elId);
+    if (!figJson?.data?.length) {
+      if (typeof Plotly !== "undefined") Plotly.purge(el);
+      el.innerHTML = "<p class='meta'>표시할 모델별 차트 데이터가 없습니다.</p>";
+      return;
+    }
+    const fig = normalizePlotlyFig(figJson);
+    const layout = buildPlotlyLayout(fig.layout);
+    if (layout.margin && typeof layout.margin === "object") {
+      layout.margin.l = Math.max(layout.margin.l || 0, 80);
+    } else {
+      layout.margin = { l: 80, r: 48, t: 48, b: 80 };
+    }
+    if (layout.yaxis && typeof layout.yaxis === "object") {
+      layout.yaxis.automargin = true;
+    }
+    if (typeof Plotly !== "undefined") Plotly.purge(el);
+    el.innerHTML = "";
+    return Plotly.newPlot(el, fig.data, layout, { responsive: true })
+      .then(() => Plotly.Plots.resize(el))
+      .catch((err) => {
+        console.error("Plotly model chart failed:", err);
+        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+      });
+  }
+
+  /** 실시간 추이 전용 — 구간 전환 시 react 대신 purge+newPlot (멈춤 방지) */
+  function plotRtTimeline(figJson) {
+    const el = document.getElementById("chart-rt-timeline");
+    if (!el) return;
+    pendingPlots.delete("chart-rt-timeline");
+    if (!figJson?.data?.length) {
+      if (typeof Plotly !== "undefined") Plotly.purge(el);
+      el.innerHTML = "<p class='meta'>표시할 차트 데이터가 없습니다.</p>";
+      return;
+    }
+    const fig = normalizePlotlyFig(figJson);
+    const layout = buildRtTimelineLayout(fig.layout);
+    if (typeof Plotly !== "undefined") {
+      Plotly.purge(el);
+    }
+    el.innerHTML = "";
+    return Plotly.newPlot(el, fig.data, layout, { responsive: true })
+      .then(() => {
+        Plotly.Plots.resize(el);
+        if (layout.yaxis?.automargin || layout.yaxis2?.automargin) {
+          return Plotly.relayout(el, {
+            "yaxis.automargin": true,
+            "yaxis2.automargin": true,
+          });
+        }
+      })
+      .catch((err) => {
+        console.error("Plotly timeline failed:", err);
+        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+      });
+  }
+
+  function rtTimelineLabel(gran, mode) {
+    const g = gran === "recent_5m" ? "최근 2시간 · 5분" : "시간별 (오늘)";
+    const m = mode === "incremental" ? "증분" : "누적";
+    return `${g} · ${m}`;
   }
 
   function renderRtTimeline() {
-    const timeline = lastRealtimeJson?.timeline;
-    const gran = $("#rt-timeline-granularity")?.value || "hour";
-    const mode = $("#rt-timeline-mode")?.value || "incremental";
-    const points = pickTimelineSeries(timeline, gran, mode);
-    const fig = buildTimelineFig(points, mode);
+    const statusEl = $("#rt-timeline-status");
+    const gran =
+      document.getElementById("rt-timeline-granularity")?.value || "hour";
+    const mode = document.getElementById("rt-timeline-mode")?.value || "incremental";
+
+    if (!lastRealtimeJson) {
+      if (statusEl) statusEl.textContent = "데이터를 불러오는 중…";
+      fetchRealtime();
+      return;
+    }
+
+    if (statusEl) statusEl.textContent = rtTimelineLabel(gran, mode);
+
+    const fig = pickTimelineChart(lastRealtimeJson.charts, gran, mode);
     if (!fig) {
       const el = document.getElementById("chart-rt-timeline");
       if (!el) return;
-      const meta = lastRealtimeJson?.timeline_meta || {};
+      const meta = lastRealtimeJson.timeline_meta || {};
       const n = meta.snapshot_lines ?? 0;
-      const gran = $("#rt-timeline-granularity")?.value || "hour";
       let msg = "표시할 차트 데이터가 없습니다.";
       if (n > 0 && gran === "recent_5m") {
         const last = meta.last_snapshot_at
           ? fmtKst(meta.last_snapshot_at)
           : "—";
         msg =
-          `스냅샷 ${fmtNum(n)}건이 있으나 «최근 2시간» 안에 해당하는 구간이 없습니다. 마지막 기록: ${last}. «시간별 (오늘)»을 사용하거나 API를 계속 띄워 두세요. (5개 이상 필요 없음)`;
+          `스냅샷 ${fmtNum(n)}건 — 최근 2시간 구간이 비어 있습니다. 마지막 기록: ${last}`;
       } else if (n > 0) {
-        msg = `스냅샷 ${fmtNum(n)}건 — «최근 2시간 · 5분» 또는 잠시 후 다시 시도하세요.`;
-      } else if (lastRealtimeJson?.status === "loading") {
-        msg = "사용량 조회 중… 스냅샷은 API 기동 후 약 1분부터 쌓입니다.";
+        msg = `스냅샷 ${fmtNum(n)}건 — 다른 구간/표시를 선택하거나 새로고침하세요.`;
+      } else if (lastRealtimeJson.status === "loading") {
+        msg = "사용량 조회 중…";
       } else {
-        msg = "오늘 스냅샷이 아직 없습니다. API 컨테이너가 1분 이상 떠 있어야 합니다.";
+        msg = "오늘 스냅샷이 없습니다.";
       }
-      if (typeof Plotly !== "undefined" && el.classList?.contains("js-plotly-plot")) {
-        Plotly.purge(el);
-      }
-      pendingPlots.delete("chart-rt-timeline");
+      if (typeof Plotly !== "undefined") Plotly.purge(el);
       el.innerHTML = `<p class='meta'>${msg}</p>`;
+      if (statusEl) statusEl.textContent = `${rtTimelineLabel(gran, mode)} — ${msg}`;
       return;
     }
-    plot("chart-rt-timeline", fig);
+
+    plotRtTimeline(fig);
+  }
+
+  function onRtTimelineControlChange() {
+    renderRtTimeline();
   }
 
   async function fetchHistory() {
+    const gen = ++historyFetchGen;
     const params = new URLSearchParams();
     const since = sinceParam();
     const until = untilParam();
@@ -458,8 +581,10 @@
     if (historyForce) params.set("force", "true");
     try {
       const data = await apiGet(`/api/v1/usage/history?${params}`);
+      if (gen !== historyFetchGen) return;
       applyHistory(data);
     } catch (e) {
+      if (gen !== historyFetchGen) return;
       showBanner(`API 오류: ${e.message}`);
     }
   }
@@ -516,6 +641,9 @@
       fetchRealtime();
       scheduleRealtime();
       scheduleFlushPlots();
+      if (lastRealtimeJson) {
+        setTimeout(() => renderRtTimeline(), 50);
+      }
     }
   }
 
@@ -579,8 +707,10 @@
 
     $("#history-ttl").addEventListener("change", scheduleHistory);
 
-    $("#rt-timeline-granularity")?.addEventListener("change", renderRtTimeline);
-    $("#rt-timeline-mode")?.addEventListener("change", renderRtTimeline);
+    const granSel = document.getElementById("rt-timeline-granularity");
+    const modeSel = document.getElementById("rt-timeline-mode");
+    if (granSel) granSel.addEventListener("change", onRtTimelineControlChange);
+    if (modeSel) modeSel.addEventListener("change", onRtTimelineControlChange);
 
     startPoll();
     setView("history");
