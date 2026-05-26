@@ -157,13 +157,13 @@ def get_realtime(
 def _session_table_rows(sessions: list[dict]) -> list[dict]:
     return [
         {
-            "세션": (s["period"][:8] + "…") if len(s["period"]) > 8 else s["period"],
-            "에이전트": s.get("agent", ""),
-            "총 토큰": s["totalTokens"],
-            "비용(USD)": s["totalCost"],
+            "Session": (s["period"][:8] + "…") if len(s["period"]) > 8 else s["period"],
+            "Agent": s.get("agent", ""),
+            "Total tokens": s["totalTokens"],
+            "Cost (USD)": s["totalCost"],
             "Input": s["inputTokens"],
             "Output": s["outputTokens"],
-            "모델": ", ".join(s.get("modelsUsed") or []),
+            "Models": ", ".join(s.get("modelsUsed") or []),
         }
         for s in sorted(sessions, key=lambda x: x["totalTokens"], reverse=True)
     ]

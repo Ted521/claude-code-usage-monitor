@@ -1,52 +1,51 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Claude Code 사용량</title>
+  <title>Claude Code Usage</title>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
 </head>
 <body>
   <header class="header">
-    <h1>Claude Code 사용량</h1>
+    <h1>Claude Code Usage</h1>
   </header>
 
   <nav class="tab-bar" role="tablist">
-    <button type="button" class="tab active" data-view="history" role="tab">기록·차트</button>
-    <button type="button" class="tab" data-view="realtime" role="tab">실시간 (오늘)</button>
+    <button type="button" class="tab active" data-view="history" role="tab">History &amp; Charts</button>
+    <button type="button" class="tab" data-view="realtime" role="tab">Realtime (Today)</button>
   </nav>
 
   <div id="toast" class="toast hidden" aria-live="polite"></div>
   <div id="banner" class="banner hidden"></div>
 
-  <!-- 기록 -->
   <section id="view-history" class="view active">
     <aside class="sidebar">
-      <h2>설정</h2>
-      <label class="check"><input type="checkbox" id="use-since" checked /> 시작일</label>
+      <h2>Settings</h2>
+      <label class="check"><input type="checkbox" id="use-since" checked /> Start date</label>
       <input type="date" id="since-date" />
-      <label class="check"><input type="checkbox" id="use-until" /> 종료일</label>
+      <label class="check"><input type="checkbox" id="use-until" /> End date</label>
       <input type="date" id="until-date" disabled />
-      <label>자동 갱신 (초)</label>
+      <label>Auto refresh (sec)</label>
       <select id="history-ttl">
-        <option value="30">30초</option>
-        <option value="60" selected>60초</option>
-        <option value="120">120초</option>
-        <option value="300">300초</option>
+        <option value="30">30s</option>
+        <option value="60" selected>60s</option>
+        <option value="120">120s</option>
+        <option value="300">300s</option>
       </select>
-      <button type="button" class="btn primary" id="btn-history-refresh">지금 새로고침</button>
+      <button type="button" class="btn primary" id="btn-history-refresh">Refresh now</button>
     </aside>
     <main class="content">
       <p id="history-meta" class="meta">—</p>
       <div id="history-metrics" class="metrics"></div>
       <div class="sub-tabs">
-        <button type="button" class="sub-tab active" data-sub="trend">추이</button>
-        <button type="button" class="sub-tab" data-sub="table">일별 표</button>
-        <button type="button" class="sub-tab" data-sub="models">모델별</button>
+        <button type="button" class="sub-tab active" data-sub="trend">Trend</button>
+        <button type="button" class="sub-tab" data-sub="table">Daily table</button>
+        <button type="button" class="sub-tab" data-sub="models">By model</button>
       </div>
       <div id="history-sub-trend" class="sub-panel active">
-        <h3>비용 · 토큰</h3>
+        <h3>Cost &middot; Tokens</h3>
         <div id="chart-cost-tokens" class="chart"></div>
         <h3>Input / Output</h3>
         <div id="chart-io" class="chart"></div>
@@ -56,44 +55,43 @@
       </div>
       <div id="history-sub-models" class="sub-panel">
         <div class="table-wrap" id="models-detail-table"></div>
-        <h3>모델별 누적 비용</h3>
+        <h3>Cumulative cost by model</h3>
         <div id="chart-model-cost" class="chart"></div>
       </div>
     </main>
   </section>
 
-  <!-- 실시간 -->
   <section id="view-realtime" class="view">
     <aside class="sidebar">
-      <h2>실시간</h2>
-      <button type="button" class="btn primary" id="btn-realtime-refresh">지금 새로고침</button>
+      <h2>Realtime</h2>
+      <button type="button" class="btn primary" id="btn-realtime-refresh">Refresh now</button>
     </aside>
     <main class="content">
-      <h2 id="rt-title">오늘</h2>
+      <h2 id="rt-title">Today</h2>
       <p id="realtime-meta" class="meta">—</p>
       <div id="realtime-metrics" class="metrics"></div>
       <div id="active-block" class="card hidden"></div>
-      <h3>오늘 사용 추이</h3>
-      <p class="meta">분 단위 스냅샷을 시간·5분 구간으로 집계합니다. 첫 데이터는 약 1분 후부터 쌓입니다.</p>
+      <h3>Today usage trend</h3>
+      <p class="meta">Minute snapshots are aggregated by hour or 5-minute buckets. First data appears after about one minute.</p>
       <div class="chart-controls">
-        <label for="rt-timeline-granularity">구간</label>
+        <label for="rt-timeline-granularity">Interval</label>
         <select id="rt-timeline-granularity">
-          <option value="hour" selected>시간별 (오늘)</option>
-          <option value="recent_5m">최근 2시간 · 5분</option>
+          <option value="hour" selected>Hourly (today)</option>
+          <option value="recent_5m">Last 2 hours &middot; 5 min</option>
         </select>
-        <label for="rt-timeline-mode">표시</label>
+        <label for="rt-timeline-mode">Display</label>
         <select id="rt-timeline-mode">
-          <option value="incremental" selected>증분</option>
-          <option value="cumulative">누적</option>
+          <option value="incremental" selected>Incremental</option>
+          <option value="cumulative">Cumulative</option>
         </select>
       </div>
       <p id="rt-timeline-status" class="meta">—</p>
       <div id="chart-rt-timeline" class="chart"></div>
-      <h3>모델별 (오늘) · 토큰</h3>
+      <h3>By model (today) &middot; Tokens</h3>
       <div id="chart-rt-model-tokens" class="chart"></div>
       <div class="table-wrap" id="rt-model-table"></div>
       <details class="collapsible">
-        <summary>세션별 (오늘)</summary>
+        <summary>By session (today)</summary>
         <div class="table-wrap" id="session-table"></div>
       </details>
     </main>
@@ -108,6 +106,6 @@
       realtimeIntervalMs: 60000,
     };
   </script>
-  <script src="{{ url_for('static', filename='app.js') }}?v=9"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=11"></script>
 </body>
 </html>

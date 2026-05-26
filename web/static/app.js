@@ -15,15 +15,41 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  function fmtNum(n) {
-    return (n ?? 0).toLocaleString();
+  function fmtCompact(n) {
+    const v = Number(n ?? 0);
+    if (!Number.isFinite(v)) return "0";
+    const abs = Math.abs(v);
+    const sign = v < 0 ? "-" : "";
+    if (abs >= 1e6) {
+      const scaled = abs / 1e6;
+      const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+      return sign + scaled.toFixed(digits).replace(/\.?0+$/, "") + "m";
+    }
+    if (abs >= 1e3) {
+      const scaled = abs / 1e3;
+      const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+      return sign + scaled.toFixed(digits).replace(/\.?0+$/, "") + "k";
+    }
+    if (Number.isInteger(v)) return String(v);
+    return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
   }
+
+  function fmtNum(n) {
+    return fmtCompact(n);
+  }
+
   function fmtUsd(n) {
-    return "$" + (n ?? 0).toFixed(4);
+    const v = Number(n ?? 0);
+    if (!Number.isFinite(v)) return "$0.0000";
+    if (Math.abs(v) >= 1000) {
+      const compact = fmtCompact(v);
+      return compact.startsWith("-") ? "-$" + compact.slice(1) : "$" + compact;
+    }
+    return "$" + v.toFixed(4);
   }
 
   const TZ_KST = "Asia/Seoul";
-  const dtFmt = new Intl.DateTimeFormat("ko-KR", {
+  const dtFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ_KST,
     year: "numeric",
     month: "2-digit",
@@ -33,7 +59,6 @@
     hour12: false,
   });
 
-  /** ccusage ISO(UTC) → 한국 시간 표시 */
   function fmtKst(iso) {
     const d = parseApiTime(iso);
     if (!d || Number.isNaN(d.getTime())) return iso ? String(iso) : "—";
@@ -41,7 +66,7 @@
   }
 
   function fmtKstRange(startIso, endIso) {
-    return `${fmtKst(startIso)} ~ ${fmtKst(endIso)}`;
+    return `${fmtKst(startIso)} – ${fmtKst(endIso)}`;
   }
 
   function parseApiTime(iso) {
@@ -73,7 +98,6 @@
 
   const pendingPlots = new Map();
 
-  /** Python Plotly to_json() bdata → 일반 배열 (구 API 응답 호환) */
   function decodePlotlyArray(obj) {
     if (obj == null || typeof obj !== "object" || !obj.bdata) return obj;
     const bin = atob(obj.bdata);
@@ -118,23 +142,21 @@
     return false;
   }
 
-  /** loading 중 기존 Plotly 차트를 지우지 않음 (빈 응답·늦게 도착한 요청 방지) */
   function setChartLoading(elId, message) {
     const el = document.getElementById(elId);
     if (!el) return;
     if (el.classList?.contains("js-plotly-plot")) return;
     pendingPlots.delete(elId);
-    el.innerHTML = `<p class="meta chart-loading">${message || "차트 불러오는 중…"}</p>`;
+    el.innerHTML = `<p class="meta chart-loading">${message || "Loading chart…"}</p>`;
   }
 
-  /** 기록·차트 탭 — Plotly.react 멈춤 방지 */
   function plotHistory(elId, figJson) {
     const el = document.getElementById(elId);
     if (!el) return;
     pendingPlots.delete(elId);
     if (!figJson?.data?.length) {
       if (typeof Plotly !== "undefined") Plotly.purge(el);
-      el.innerHTML = "<p class='meta'>표시할 차트 데이터가 없습니다.</p>";
+      el.innerHTML = "<p class='meta'>No chart data to display.</p>";
       return;
     }
     const fig = normalizePlotlyFig(figJson);
@@ -143,9 +165,15 @@
     el.innerHTML = "";
     return Plotly.newPlot(el, fig.data, layout, { responsive: true })
       .then(() => Plotly.Plots.resize(el))
+      .then(() =>
+        Plotly.relayout(el, {
+          "yaxis.automargin": true,
+          "yaxis2.automargin": true,
+        })
+      )
       .catch((err) => {
         console.error("Plotly history chart failed:", elId, err);
-        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+        el.innerHTML = `<p class='meta'>Chart render error: ${err.message || err}</p>`;
       });
   }
 
@@ -179,7 +207,7 @@
         Plotly.purge(el);
       }
       pendingPlots.delete(elId);
-      el.innerHTML = "<p class='meta'>표시할 차트 데이터가 없습니다.</p>";
+      el.innerHTML = "<p class='meta'>No chart data to display.</p>";
       return;
     }
     if (!opts.force && !isVisible(el)) {
@@ -193,10 +221,14 @@
     Plotly.react(el, fig.data, layout, { responsive: true })
       .then(() => {
         if (typeof Plotly !== "undefined") Plotly.Plots.resize(el);
+        return Plotly.relayout(el, {
+          "yaxis.automargin": true,
+          "yaxis2.automargin": true,
+        });
       })
       .catch((err) => {
         console.error("Plotly render failed:", elId, err);
-        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+        el.innerHTML = `<p class='meta'>Chart render error: ${err.message || err}</p>`;
       });
   }
 
@@ -205,6 +237,108 @@
     "chart-io",
     "chart-model-cost",
   ]);
+
+  const SORTABLE_TABLE_IDS = new Set(["history-table", "models-detail-table"]);
+  const tableStore = new Map();
+
+  function compareCellValues(a, b) {
+    const aEmpty = a == null || a === "";
+    const bEmpty = b == null || b === "";
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    const na = Number(a);
+    const nb = Number(b);
+    if (
+      Number.isFinite(na) &&
+      Number.isFinite(nb) &&
+      String(a).trim() !== "" &&
+      String(b).trim() !== ""
+    ) {
+      return na - nb;
+    }
+    return String(a).localeCompare(String(b), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  }
+
+  function sortTableRows(rows, col, dir) {
+    const sign = dir === "asc" ? 1 : -1;
+    return [...rows].sort(
+      (ra, rb) => sign * compareCellValues(ra[col], rb[col])
+    );
+  }
+
+  function formatTableCell(col, v) {
+    if (typeof v === "number" && /cost/i.test(col)) return fmtUsd(v);
+    if (typeof v === "number") return fmtNum(v);
+    return v ?? "";
+  }
+
+  function paintSortableTable(containerId) {
+    const el = document.getElementById(containerId);
+    const state = tableStore.get(containerId);
+    if (!el || !state?.rows?.length) {
+      if (el && !state?.rows?.length) el.innerHTML = "<p class='meta'>No data</p>";
+      return;
+    }
+    const { rows, sortCol, sortDir } = state;
+    const cols = Object.keys(rows[0]);
+    const sorted =
+      sortCol && sortDir
+        ? sortTableRows(rows, sortCol, sortDir)
+        : rows;
+    const headerCells = cols
+      .map((c) => {
+        const active = c === sortCol;
+        const aria =
+          active && sortDir === "asc"
+            ? "ascending"
+            : active && sortDir === "desc"
+              ? "descending"
+              : "none";
+        const indicator = active ? (sortDir === "asc" ? " ▲" : " ▼") : "";
+        return `<th class="sortable" scope="col" data-col="${escapeHtml(
+          c
+        )}" aria-sort="${aria}">${escapeHtml(c)}${indicator}</th>`;
+      })
+      .join("");
+    let body = "";
+    for (const row of sorted) {
+      body +=
+        "<tr>" +
+        cols.map((c) => `<td>${escapeHtml(formatTableCell(c, row[c]))}</td>`).join("") +
+        "</tr>";
+    }
+    el.innerHTML = `<table class="data"><thead><tr>${headerCells}</tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function onSortableTableHeaderClick(e) {
+    const th = e.target.closest("table.data th.sortable");
+    if (!th) return;
+    const wrap = th.closest(".table-wrap");
+    if (!wrap?.id || !SORTABLE_TABLE_IDS.has(wrap.id)) return;
+    const col = th.dataset.col;
+    const state = tableStore.get(wrap.id);
+    if (!state?.rows?.length || !col) return;
+    let dir = "asc";
+    if (state.sortCol === col) {
+      dir = state.sortDir === "asc" ? "desc" : "asc";
+    }
+    state.sortCol = col;
+    state.sortDir = dir;
+    paintSortableTable(wrap.id);
+  }
 
   function flushPendingPlots(root) {
     const scope = root || document;
@@ -222,28 +356,30 @@
   function renderTable(containerId, rows) {
     const el = document.getElementById(containerId);
     if (!rows?.length) {
-      el.innerHTML = "<p class='meta'>데이터 없음</p>";
+      tableStore.delete(containerId);
+      el.innerHTML = "<p class='meta'>No data</p>";
+      return;
+    }
+    if (SORTABLE_TABLE_IDS.has(containerId)) {
+      const prev = tableStore.get(containerId);
+      tableStore.set(containerId, {
+        rows,
+        sortCol: prev?.sortCol ?? null,
+        sortDir: prev?.sortDir ?? "asc",
+      });
+      paintSortableTable(containerId);
       return;
     }
     const cols = Object.keys(rows[0]);
     let html =
       "<table class='data'><thead><tr>" +
-      cols.map((c) => `<th>${c}</th>`).join("") +
+      cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("") +
       "</tr></thead><tbody>";
     for (const row of rows) {
       html +=
         "<tr>" +
         cols
-          .map((c) => {
-            const v = row[c];
-            const cell =
-              typeof v === "number" && c.includes("비용")
-                ? v.toFixed(4)
-                : typeof v === "number"
-                  ? fmtNum(v)
-                  : v;
-            return `<td>${cell}</td>`;
-          })
+          .map((c) => `<td>${escapeHtml(formatTableCell(c, row[c]))}</td>`)
           .join("") +
         "</tr>";
     }
@@ -289,14 +425,14 @@
 
     const est = payload.local_cost_estimate;
     const estNote = est?.enabled
-      ? ` · 로컬 비용 추정 Sonnet×${Math.round((est.ratio ?? 0.5) * 100)}%`
+      ? ` · local cost est. Sonnet×${Math.round((est.ratio ?? 0.5) * 100)}%`
       : "";
     $("#history-meta").textContent = payload.updated_at
-      ? `마지막 갱신: ${fmtUpdatedAt(payload.updated_at)} · 상태: ${payload.status}${estNote}`
-      : `상태: ${payload.status}${estNote}`;
+      ? `Last updated: ${fmtUpdatedAt(payload.updated_at)} · Status: ${payload.status}${estNote}`
+      : `Status: ${payload.status}${estNote}`;
 
     if (payload.status === "loading") {
-      showBanner("🔄 기록 데이터 조회 중… (화면은 계속 사용 가능)");
+      showBanner("🔄 Loading history data… (you can keep using the page)");
     } else {
       hideBanner();
     }
@@ -313,20 +449,20 @@
       return;
     }
     if (payload.status === "error" && payload.daily?.length) {
-      toast("갱신 실패 — 이전 데이터 표시");
+      toast("Refresh failed — showing previous data");
     } else if (
       payload.status === "ready" &&
       prev?.status === "loading" &&
       historyForce
     ) {
-      toast("사용량 데이터를 갱신했습니다");
+      toast("Usage data updated");
     }
     historyForce = false;
 
     const totals = payload.totals || {};
     renderMetrics("history-metrics", [
-      { label: "총 토큰", value: fmtNum(totals.totalTokens) },
-      { label: "비용 (USD)", value: fmtUsd(totals.totalCost) },
+      { label: "Total tokens", value: fmtNum(totals.totalTokens) },
+      { label: "Cost (USD)", value: fmtUsd(totals.totalCost) },
       { label: "Input", value: fmtNum(totals.inputTokens) },
       { label: "Output", value: fmtNum(totals.outputTokens) },
       { label: "Cache Read", value: fmtNum(totals.cacheReadTokens) },
@@ -347,17 +483,17 @@
     const prev = lastRealtimeJson;
     lastRealtimeJson = payload;
 
-    $("#rt-title").textContent = `오늘 · ${payload.today || new Date().toISOString().slice(0, 10)}`;
+    $("#rt-title").textContent = `Today · ${payload.today || new Date().toISOString().slice(0, 10)}`;
     const estRt = payload.local_cost_estimate;
     const estRtNote = estRt?.enabled
-      ? ` · 로컬 비용 추정 Sonnet×${Math.round((estRt.ratio ?? 0.5) * 100)}%`
+      ? ` · local cost est. Sonnet×${Math.round((estRt.ratio ?? 0.5) * 100)}%`
       : "";
     $("#realtime-meta").textContent = payload.updated_at
-      ? `마지막 갱신: ${fmtUpdatedAt(payload.updated_at)}${estRtNote}`
+      ? `Last updated: ${fmtUpdatedAt(payload.updated_at)}${estRtNote}`
       : "—";
 
     if (payload.status === "loading") {
-      showBanner("🔄 오늘 사용량 조회 중…");
+      showBanner("🔄 Loading today’s usage…");
     } else if (activeView === "realtime") {
       hideBanner();
     }
@@ -372,14 +508,14 @@
       prev?.status === "loading" &&
       realtimeForce
     ) {
-      toast("실시간 사용량을 갱신했습니다");
+      toast("Realtime usage updated");
     }
     realtimeForce = false;
 
     const totals = payload.totals || {};
     renderMetrics("realtime-metrics", [
-      { label: "총 토큰", value: fmtNum(totals.totalTokens) },
-      { label: "비용 (USD)", value: fmtUsd(totals.totalCost) },
+      { label: "Total tokens", value: fmtNum(totals.totalTokens) },
+      { label: "Cost (USD)", value: fmtUsd(totals.totalCost) },
       { label: "Input", value: fmtNum(totals.inputTokens) },
       { label: "Output", value: fmtNum(totals.outputTokens) },
       { label: "Cache Read", value: fmtNum(totals.cacheReadTokens) },
@@ -393,14 +529,14 @@
       const proj = active.projection || {};
       card.classList.remove("hidden");
       card.innerHTML = `
-        <h3>활성 세션 블록</h3>
+        <h3>Active session block</h3>
         <div class="metrics">
-          <div class="metric"><div class="label">블록 비용</div><div class="value">${fmtUsd(active.costUSD)}</div></div>
-          <div class="metric"><div class="label">블록 토큰</div><div class="value">${fmtNum(active.totalTokens)}</div></div>
-          <div class="metric"><div class="label">소모 속도</div><div class="value">${fmtNum(burn.tokensPerMinute)} tok/분</div></div>
-          <div class="metric"><div class="label">예상 비용</div><div class="value">$${(proj.totalCost ?? 0).toFixed(2)}</div></div>
+          <div class="metric"><div class="label">Block cost</div><div class="value">${fmtUsd(active.costUSD)}</div></div>
+          <div class="metric"><div class="label">Block tokens</div><div class="value">${fmtNum(active.totalTokens)}</div></div>
+          <div class="metric"><div class="label">Burn rate</div><div class="value">${fmtNum(burn.tokensPerMinute)} tok/min</div></div>
+          <div class="metric"><div class="label">Projected cost</div><div class="value">$${(proj.totalCost ?? 0).toFixed(2)}</div></div>
         </div>
-        <p class="meta">구간 ${fmtKstRange(active.startTime, active.endTime)} · ${(active.models || []).join(", ")}</p>`;
+        <p class="meta">Window ${fmtKstRange(active.startTime, active.endTime)} · ${(active.models || []).join(", ")}</p>`;
     } else {
       card.classList.add("hidden");
     }
@@ -435,16 +571,11 @@
     layout.paper_bgcolor = "#ffffff";
     layout.plot_bgcolor = "#ffffff";
     layout.autosize = true;
-    return layout;
-  }
-
-  function buildRtTimelineLayout(figLayout) {
-    const layout = buildPlotlyLayout(figLayout);
     if (layout.margin && typeof layout.margin === "object") {
-      layout.margin.l = Math.max(layout.margin.l || 0, 80);
+      layout.margin.l = Math.max(layout.margin.l || 0, 90);
       layout.margin.r = Math.max(layout.margin.r || 0, 72);
     } else {
-      layout.margin = { l: 80, r: 72, t: 48, b: 80 };
+      layout.margin = { l: 90, r: 72, t: 48, b: 80 };
     }
     if (layout.yaxis && typeof layout.yaxis === "object") {
       layout.yaxis.automargin = true;
@@ -455,44 +586,39 @@
     return layout;
   }
 
-  /** 실시간 모델별 막대 — react 멈춤 방지 */
+  function buildRtTimelineLayout(figLayout) {
+    return buildPlotlyLayout(figLayout);
+  }
+
   function plotRtModel(elId, figJson) {
     const el = document.getElementById(elId);
     if (!el) return;
     pendingPlots.delete(elId);
     if (!figJson?.data?.length) {
       if (typeof Plotly !== "undefined") Plotly.purge(el);
-      el.innerHTML = "<p class='meta'>표시할 모델별 차트 데이터가 없습니다.</p>";
+      el.innerHTML = "<p class='meta'>No model chart data to display.</p>";
       return;
     }
     const fig = normalizePlotlyFig(figJson);
     const layout = buildPlotlyLayout(fig.layout);
-    if (layout.margin && typeof layout.margin === "object") {
-      layout.margin.l = Math.max(layout.margin.l || 0, 80);
-    } else {
-      layout.margin = { l: 80, r: 48, t: 48, b: 80 };
-    }
-    if (layout.yaxis && typeof layout.yaxis === "object") {
-      layout.yaxis.automargin = true;
-    }
     if (typeof Plotly !== "undefined") Plotly.purge(el);
     el.innerHTML = "";
     return Plotly.newPlot(el, fig.data, layout, { responsive: true })
       .then(() => Plotly.Plots.resize(el))
+      .then(() => Plotly.relayout(el, { "yaxis.automargin": true }))
       .catch((err) => {
         console.error("Plotly model chart failed:", err);
-        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+        el.innerHTML = `<p class='meta'>Chart render error: ${err.message || err}</p>`;
       });
   }
 
-  /** 실시간 추이 전용 — 구간 전환 시 react 대신 purge+newPlot (멈춤 방지) */
   function plotRtTimeline(figJson) {
     const el = document.getElementById("chart-rt-timeline");
     if (!el) return;
     pendingPlots.delete("chart-rt-timeline");
     if (!figJson?.data?.length) {
       if (typeof Plotly !== "undefined") Plotly.purge(el);
-      el.innerHTML = "<p class='meta'>표시할 차트 데이터가 없습니다.</p>";
+      el.innerHTML = "<p class='meta'>No chart data to display.</p>";
       return;
     }
     const fig = normalizePlotlyFig(figJson);
@@ -504,22 +630,20 @@
     return Plotly.newPlot(el, fig.data, layout, { responsive: true })
       .then(() => {
         Plotly.Plots.resize(el);
-        if (layout.yaxis?.automargin || layout.yaxis2?.automargin) {
-          return Plotly.relayout(el, {
-            "yaxis.automargin": true,
-            "yaxis2.automargin": true,
-          });
-        }
+        return Plotly.relayout(el, {
+          "yaxis.automargin": true,
+          "yaxis2.automargin": true,
+        });
       })
       .catch((err) => {
         console.error("Plotly timeline failed:", err);
-        el.innerHTML = `<p class='meta'>차트 렌더 오류: ${err.message || err}</p>`;
+        el.innerHTML = `<p class='meta'>Chart render error: ${err.message || err}</p>`;
       });
   }
 
   function rtTimelineLabel(gran, mode) {
-    const g = gran === "recent_5m" ? "최근 2시간 · 5분" : "시간별 (오늘)";
-    const m = mode === "incremental" ? "증분" : "누적";
+    const g = gran === "recent_5m" ? "Last 2 hours · 5 min" : "Hourly (today)";
+    const m = mode === "incremental" ? "Incremental" : "Cumulative";
     return `${g} · ${m}`;
   }
 
@@ -530,7 +654,7 @@
     const mode = document.getElementById("rt-timeline-mode")?.value || "incremental";
 
     if (!lastRealtimeJson) {
-      if (statusEl) statusEl.textContent = "데이터를 불러오는 중…";
+      if (statusEl) statusEl.textContent = "Loading data…";
       fetchRealtime();
       return;
     }
@@ -543,19 +667,19 @@
       if (!el) return;
       const meta = lastRealtimeJson.timeline_meta || {};
       const n = meta.snapshot_lines ?? 0;
-      let msg = "표시할 차트 데이터가 없습니다.";
+      let msg = "No chart data to display.";
       if (n > 0 && gran === "recent_5m") {
         const last = meta.last_snapshot_at
           ? fmtKst(meta.last_snapshot_at)
           : "—";
         msg =
-          `스냅샷 ${fmtNum(n)}건 — 최근 2시간 구간이 비어 있습니다. 마지막 기록: ${last}`;
+          `${fmtNum(n)} snapshots — last 2 hours bucket is empty. Last record: ${last}`;
       } else if (n > 0) {
-        msg = `스냅샷 ${fmtNum(n)}건 — 다른 구간/표시를 선택하거나 새로고침하세요.`;
+        msg = `${fmtNum(n)} snapshots — try another interval/display or refresh.`;
       } else if (lastRealtimeJson.status === "loading") {
-        msg = "사용량 조회 중…";
+        msg = "Loading usage…";
       } else {
-        msg = "오늘 스냅샷이 없습니다.";
+        msg = "No snapshots for today yet.";
       }
       if (typeof Plotly !== "undefined") Plotly.purge(el);
       el.innerHTML = `<p class='meta'>${msg}</p>`;
@@ -585,7 +709,7 @@
       applyHistory(data);
     } catch (e) {
       if (gen !== historyFetchGen) return;
-      showBanner(`API 오류: ${e.message}`);
+      showBanner(`API error: ${e.message}`);
     }
   }
 
@@ -597,7 +721,7 @@
       const data = await apiGet(`/api/v1/usage/realtime?${params}`);
       applyRealtime(data);
     } catch (e) {
-      showBanner(`API 오류: ${e.message}`);
+      showBanner(`API error: ${e.message}`);
     }
   }
 
@@ -706,6 +830,8 @@
     });
 
     $("#history-ttl").addEventListener("change", scheduleHistory);
+
+    document.addEventListener("click", onSortableTableHeaderClick);
 
     const granSel = document.getElementById("rt-timeline-granularity");
     const modeSel = document.getElementById("rt-timeline-mode");

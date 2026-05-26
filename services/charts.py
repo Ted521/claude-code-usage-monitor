@@ -1,4 +1,4 @@
-"""Plotly 차트 → JSON (Plotly.js 렌더링용)."""
+"""Plotly charts → JSON (for Plotly.js rendering)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,16 @@ from plotly.subplots import make_subplots
 BAR_BARGAP = 0.45
 BAR_GROUPGAP = 0.12
 CHART_HEIGHT = 520
+CHART_MARGIN = dict(l=90, r=72, t=48, b=80)
+TOKEN_TICKFORMAT = ".2s"
+
+
+def _usd_tickformat(values: list[float]) -> str:
+    vals = [abs(float(v or 0)) for v in values]
+    if not vals or max(vals) < 1000:
+        return "$.4f"
+    return "$,.2s"
+
 
 _DTYPE_MAP = {
     "f8": np.float64,
@@ -29,7 +39,7 @@ def _decode_bdata(obj: dict[str, Any]) -> list[Any]:
 
 
 def _coerce_plotly_arrays(node: Any) -> Any:
-    """Plotly dict → FastAPI/Plotly.js 호환 (bdata·numpy 제거)."""
+    """Plotly dict → FastAPI/Plotly.js compatible (strip bdata/numpy)."""
     if isinstance(node, np.ndarray):
         return node.tolist()
     if isinstance(node, np.generic):
@@ -47,9 +57,12 @@ def _fig_json(fig: go.Figure) -> dict[str, Any]:
     spec = _coerce_plotly_arrays(fig.to_dict())
     layout = spec.get("layout")
     if isinstance(layout, dict) and isinstance(layout.get("template"), dict):
-        # Plotly.js는 Python이 펼친 template dict를 처리하지 못함
         layout["template"] = "plotly_white"
     return spec
+
+
+def _apply_chart_yaxes(fig: go.Figure) -> None:
+    fig.update_yaxes(automargin=True)
 
 
 def _apply_x_unified_hover(fig: go.Figure) -> None:
@@ -57,7 +70,7 @@ def _apply_x_unified_hover(fig: go.Figure) -> None:
         hovermode="x unified",
         hoverdistance=72,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=48, r=48, t=48, b=80),
+        margin=dict(CHART_MARGIN),
         height=CHART_HEIGHT,
     )
     fig.update_xaxes(
@@ -69,6 +82,7 @@ def _apply_x_unified_hover(fig: go.Figure) -> None:
         spikethickness=1.5,
         spikedash="solid",
     )
+    _apply_chart_yaxes(fig)
 
 
 def cost_tokens_chart(daily: list[dict]) -> dict[str, Any] | None:
@@ -77,9 +91,9 @@ def cost_tokens_chart(daily: list[dict]) -> dict[str, Any] | None:
     df = pd.DataFrame(
         [
             {
-                "날짜": d["period"],
-                "비용(USD)": d["totalCost"],
-                "총 토큰": d["totalTokens"],
+                "Date": d["period"],
+                "Cost (USD)": d["totalCost"],
+                "Total tokens": d["totalTokens"],
             }
             for d in daily
         ]
@@ -87,9 +101,9 @@ def cost_tokens_chart(daily: list[dict]) -> dict[str, Any] | None:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
         go.Scatter(
-            x=df["날짜"],
-            y=df["비용(USD)"],
-            name="비용(USD)",
+            x=df["Date"],
+            y=df["Cost (USD)"],
+            name="Cost (USD)",
             mode="lines+markers",
             line=dict(width=2, color="#1F4E79"),
             marker=dict(size=7),
@@ -98,17 +112,26 @@ def cost_tokens_chart(daily: list[dict]) -> dict[str, Any] | None:
     )
     fig.add_trace(
         go.Scatter(
-            x=df["날짜"],
-            y=df["총 토큰"],
-            name="총 토큰",
+            x=df["Date"],
+            y=df["Total tokens"],
+            name="Total tokens",
             mode="lines+markers",
             line=dict(width=2, color="#ED7D31"),
             marker=dict(size=7),
         ),
         secondary_y=True,
     )
-    fig.update_yaxes(title_text="비용 (USD)", secondary_y=False, tickformat=".4f")
-    fig.update_yaxes(title_text="총 토큰", secondary_y=True, tickformat=",")
+    cost_vals = df["Cost (USD)"].tolist()
+    fig.update_yaxes(
+        title_text="Cost (USD)",
+        secondary_y=False,
+        tickformat=_usd_tickformat(cost_vals),
+    )
+    fig.update_yaxes(
+        title_text="Total tokens",
+        secondary_y=True,
+        tickformat=TOKEN_TICKFORMAT,
+    )
     _apply_x_unified_hover(fig)
     return _fig_json(fig)
 
@@ -118,23 +141,23 @@ def input_output_bars(daily: list[dict]) -> dict[str, Any] | None:
         return None
     df = pd.DataFrame(
         [
-            {"날짜": d["period"], "Input": d["inputTokens"], "Output": d["outputTokens"]}
+            {"Date": d["period"], "Input": d["inputTokens"], "Output": d["outputTokens"]}
             for d in daily
         ]
     )
     fig = go.Figure()
     fig.add_trace(
-        go.Bar(x=df["날짜"], y=df["Input"], name="Input", marker_color="#2E75B6")
+        go.Bar(x=df["Date"], y=df["Input"], name="Input", marker_color="#2E75B6")
     )
     fig.add_trace(
-        go.Bar(x=df["날짜"], y=df["Output"], name="Output", marker_color="#A9D18E")
+        go.Bar(x=df["Date"], y=df["Output"], name="Output", marker_color="#A9D18E")
     )
     fig.update_layout(
         barmode="group",
         bargap=BAR_BARGAP,
         bargroupgap=BAR_GROUPGAP,
-        yaxis_title="토큰",
-        yaxis_tickformat=",",
+        yaxis_title="Tokens",
+        yaxis_tickformat=TOKEN_TICKFORMAT,
     )
     _apply_x_unified_hover(fig)
     return _fig_json(fig)
@@ -156,68 +179,69 @@ def model_cost_bars(daily: list[dict]) -> dict[str, Any] | None:
     rows = []
     for d in daily:
         for mb in d.get("modelBreakdowns") or []:
-            rows.append({"모델": mb["modelName"], "비용(USD)": mb["cost"]})
+            rows.append({"Model": mb["modelName"], "Cost (USD)": mb["cost"]})
     if not rows:
         return None
     by_model = (
         pd.DataFrame(rows)
-        .groupby("모델", as_index=False)
-        .agg({"비용(USD)": "sum"})
-        .sort_values("비용(USD)", ascending=False)
+        .groupby("Model", as_index=False)
+        .agg({"Cost (USD)": "sum"})
+        .sort_values("Cost (USD)", ascending=False)
     )
+    cost_vals = by_model["Cost (USD)"].tolist()
     fig = go.Figure(
         data=[
             go.Bar(
-                x=by_model["모델"],
-                y=by_model["비용(USD)"],
+                x=by_model["Model"],
+                y=by_model["Cost (USD)"],
                 marker_color="#4472C4",
             )
         ]
     )
     fig.update_layout(
         bargap=BAR_BARGAP,
-        xaxis_title="모델",
-        yaxis_title="비용 (USD)",
-        yaxis_tickformat=".4f",
+        xaxis_title="Model",
+        yaxis_title="Cost (USD)",
+        yaxis_tickformat=_usd_tickformat(cost_vals),
         height=CHART_HEIGHT,
-        margin=dict(l=48, r=48, t=48, b=80),
+        margin=dict(CHART_MARGIN),
     )
     _apply_x_unified_hover(fig)
     return _fig_json(fig)
 
 
 def model_token_bars(daily: list[dict]) -> dict[str, Any] | None:
-    """모델별 토큰 막대 (실시간 탭)."""
+    """Token bars by model (realtime tab)."""
     rows = []
     for d in daily:
         for mb in d.get("modelBreakdowns") or []:
             rows.append(
-                {"모델": mb["modelName"], "토큰": _model_breakdown_token_total(mb)}
+                {"Model": mb["modelName"], "Tokens": _model_breakdown_token_total(mb)}
             )
     if not rows:
         return None
     by_model = (
         pd.DataFrame(rows)
-        .groupby("모델", as_index=False)
-        .agg({"토큰": "sum"})
-        .sort_values("토큰", ascending=False)
+        .groupby("Model", as_index=False)
+        .agg({"Tokens": "sum"})
+        .sort_values("Tokens", ascending=False)
     )
     fig = go.Figure(
         data=[
             go.Bar(
-                x=by_model["모델"],
-                y=by_model["토큰"],
+                x=by_model["Model"],
+                y=by_model["Tokens"],
                 marker_color="#2E75B6",
             )
         ]
     )
     fig.update_layout(
         bargap=BAR_BARGAP,
-        xaxis_title="모델",
-        yaxis_title="토큰",
-        yaxis_tickformat=",",
+        xaxis_title="Model",
+        yaxis_title="Tokens",
+        yaxis_tickformat=TOKEN_TICKFORMAT,
         height=CHART_HEIGHT,
-        margin=dict(l=80, r=48, t=48, b=80),
+        margin=dict(CHART_MARGIN),
     )
     fig.update_yaxes(automargin=True)
     fig.update_xaxes(type="category")
@@ -227,7 +251,7 @@ def model_token_bars(daily: list[dict]) -> dict[str, Any] | None:
 def timeline_usage_chart(
     points: list[dict[str, Any]], *, incremental: bool
 ) -> dict[str, Any] | None:
-    """오늘 사용 추이 (서버 생성 → Plotly.js)."""
+    """Today usage trend (server → Plotly.js)."""
     if not points:
         return None
     labels = [p["label"] for p in points]
@@ -239,7 +263,7 @@ def timeline_usage_chart(
         go.Scatter(
             x=labels,
             y=tokens,
-            name="토큰 (증분)" if incremental else "토큰 (누적)",
+            name="Tokens (incremental)" if incremental else "Tokens (cumulative)",
             mode=mode,
             line=dict(width=2, color="#2E75B6"),
             marker=dict(size=8, color="#2E75B6"),
@@ -251,7 +275,7 @@ def timeline_usage_chart(
         go.Scatter(
             x=labels,
             y=costs,
-            name="비용 (증분)" if incremental else "비용 (누적)",
+            name="Cost (incremental)" if incremental else "Cost (cumulative)",
             mode=mode,
             line=dict(width=2, color="#ED7D31"),
             marker=dict(size=8, color="#ED7D31"),
@@ -259,22 +283,22 @@ def timeline_usage_chart(
         secondary_y=True,
     )
     fig.update_yaxes(
-        title_text="토큰",
+        title_text="Tokens",
         secondary_y=False,
-        tickformat=",",
+        tickformat=TOKEN_TICKFORMAT,
         automargin=True,
     )
     fig.update_yaxes(
-        title_text="비용 (USD)",
+        title_text="Cost (USD)",
         secondary_y=True,
-        tickformat=".4f",
+        tickformat=_usd_tickformat(costs),
         automargin=True,
     )
     fig.update_layout(
         hovermode="x unified",
         hoverdistance=72,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=80, r=72, t=48, b=80),
+        margin=dict(CHART_MARGIN),
         height=CHART_HEIGHT,
     )
     fig.update_xaxes(
@@ -324,12 +348,13 @@ def session_tokens_bars(sessions: list[dict]) -> dict[str, Any] | None:
         ],
         layout=dict(
             height=360,
-            margin=dict(l=48, r=48, t=32, b=96),
-            xaxis_title="세션",
-            yaxis_title="토큰",
-            yaxis_tickformat=",",
+            margin=dict(CHART_MARGIN),
+            xaxis_title="Session",
+            yaxis_title="Tokens",
+            yaxis_tickformat=TOKEN_TICKFORMAT,
         ),
     )
+    fig.update_yaxes(automargin=True)
     return _fig_json(fig)
 
 
@@ -345,14 +370,14 @@ def history_charts(daily_data: dict) -> dict[str, Any]:
 def daily_table_rows(daily: list[dict]) -> list[dict]:
     return [
         {
-            "날짜": d["period"],
+            "Date": d["period"],
             "Input": d["inputTokens"],
             "Output": d["outputTokens"],
             "Cache Create": d["cacheCreationTokens"],
             "Cache Read": d["cacheReadTokens"],
-            "총 토큰": d["totalTokens"],
-            "비용(USD)": d["totalCost"],
-            "모델": ", ".join(d.get("modelsUsed") or []),
+            "Total tokens": d["totalTokens"],
+            "Cost (USD)": d["totalCost"],
+            "Models": ", ".join(d.get("modelsUsed") or []),
         }
         for d in daily
     ]
@@ -362,20 +387,16 @@ def model_detail_rows(daily: list[dict]) -> list[dict]:
     rows = []
     for d in daily:
         for mb in d.get("modelBreakdowns") or []:
-            note = (
-                "추정"
-                if mb.get("costEstimated")
-                else ""
-            )
+            note = "estimated" if mb.get("costEstimated") else ""
             rows.append(
                 {
-                    "날짜": d["period"],
-                    "모델": mb["modelName"],
+                    "Date": d["period"],
+                    "Model": mb["modelName"],
                     "Input": mb["inputTokens"],
                     "Output": mb["outputTokens"],
                     "Cache Read": mb["cacheReadTokens"],
-                    "비용(USD)": mb["cost"],
-                    "비고": note or "ccusage",
+                    "Cost (USD)": mb["cost"],
+                    "Note": note or "ccusage",
                 }
             )
     return rows

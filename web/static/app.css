@@ -253,6 +253,16 @@ table.data th {
   top: 0;
 }
 
+table.data th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+table.data th.sortable:hover {
+  background: #e2e8f0;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
