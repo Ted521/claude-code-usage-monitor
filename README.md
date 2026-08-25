@@ -1,7 +1,9 @@
 # Claude Code 사용량 대시보드
 
-Flask(UI) + FastAPI(API) + Plotly.js로 Claude Code / Codex 등 사용량을 조회합니다.  
-`ccusage` 조회는 API 백그라운드에서 실행되어 **조회 중에도 브라우저 UI는 계속 사용**할 수 있습니다.
+Flask(UI) + FastAPI(API) + Plotly.js로 Claude Code / Codex 등 사용량을 조회합니다.
+
+- **기록·차트(History)**: `ccusage`를 호출하지 않고, API가 미리 쌓아둔 로컬 스냅샷(`data/timeline/`)만 읽어 **항상 즉시** 응답합니다.
+- **실시간(오늘)**: `ccusage` 조회가 API 백그라운드에서 실행되어 **조회 중에도 브라우저 UI는 계속 사용**할 수 있습니다.
 
 ## 요구 사항
 
@@ -19,7 +21,8 @@ npx --yes ccusage daily -j
 ```text
 브라우저 → Flask (HTML + Plotly.js)
               ↓ fetch
-         FastAPI → ccusage (npx)
+         FastAPI ─┬─ /usage/history  → data/timeline/*.jsonl (로컬 스냅샷만)
+                   └─ /usage/realtime → ccusage (npx) → data/timeline/*.jsonl 에 매분 적재
 ```
 
 | 경로 | 설명 |
@@ -90,7 +93,7 @@ cd web && python app.py
 | `CORS_ORIGINS` | 미설정 시 `http://localhost:<WEB_PORT>` 자동 | — |
 | `API_BASE_URL` | 미설정 시 `http://localhost:<API_PORT>` 자동 | — |
 | `REALTIME_TTL_SEC` | 실시간 API 캐시 TTL(초) | `60` |
-| `MINUTE_SNAPSHOT_ENABLED` | 분 단위 오늘 스냅샷 (시간별 차트) | `true` |
+| `MINUTE_SNAPSHOT_ENABLED` | 분 단위 스냅샷 수집 — **history 탭의 유일한 데이터 소스**이기도 함(꺼두면 history가 계속 빈 화면) | `true` |
 | `MINUTE_SNAPSHOT_INTERVAL_SEC` | 스냅샷 주기(초), 최소 30 | `60` |
 | `USAGE_TIMELINE_HOST_DIR` | 스냅샷 **호스트** 폴더 (Compose 바인드 마운트) | `./data/timeline` |
 | `USAGE_TIMELINE_DIR` | 컨테이너 내부 경로 (보통 변경 불필요) | `/data/timeline` |
@@ -110,6 +113,11 @@ docker run --rm -v claude_check_usage-timeline:/from -v "%cd%/data/timeline":/to
 
 (볼륨 이름은 `docker volume ls`로 확인)
 
+**history는 이 스냅샷이 유일한 데이터 소스입니다.** ccusage는 호출하지 않으므로:
+
+- 스냅샷을 수집하기 시작한 날짜 이전은 조회할 수 없습니다(처음 배포하면 history가 한동안 비어 보이는 게 정상).
+- 수집이 중단됐던 구간(컨테이너 다운 등)은 영구히 빈 날짜로 남습니다 — ccusage로 다시 채우려 시도하지 않습니다. (Claude Code 자체도 세션 로그를 일정 기간 후 정리하므로, 오래된 구간은 ccusage로도 복구가 불가능한 경우가 많습니다.)
+
 ### 포트 변경
 
 | 변경 | CORS | 비고 |
@@ -125,7 +133,8 @@ docker run --rm -v claude_check_usage-timeline:/from -v "%cd%/data/timeline":/to
 - `GET /api/v1/usage/history?since=&until=` — 로컬 `data/timeline` 스냅샷만 읽음(ccusage 미호출), 매번 즉시 응답
 - `GET /api/v1/usage/realtime?force=&ttl=`
 
-응답 `status`: `loading` | `ready` | `error` — 프론트는 `loading` 시 주기적으로 재요청합니다.
+- `history` 응답 `status`: `ready` | `error` (항상 동기 응답, `loading` 없음)
+- `realtime` 응답 `status`: `loading` | `ready` | `error` — 프론트는 `loading` 시 주기적으로 재요청합니다.
 
 ## 화면
 
@@ -139,7 +148,8 @@ docker run --rm -v claude_check_usage-timeline:/from -v "%cd%/data/timeline":/to
 - **API connection refused**: 브라우저의 API URL이 `http://localhost:<API_PORT>` 인지 확인
 - **CORS 오류**: `CORS_ORIGINS`에 **웹 UI 주소**가 포함됐는지 확인 (API 포트 아님)
 - **데이터 없음**: `CLAUDE_DATA_DIR`가 실제 `.claude` 경로와 일치하는지, 볼륨 마운트가 읽기 가능한지 확인
-- **첫 조회가 느림**: `npx`가 `ccusage` 패키지를 받는 데 수십 초 걸릴 수 있음
+- **실시간 첫 조회가 느림**: `npx`가 `ccusage` 패키지를 받는 데 수십 초 걸릴 수 있음
+- **history가 계속 비어 있음**: `MINUTE_SNAPSHOT_ENABLED=false`이거나, 아직 스냅샷이 쌓이지 않은 기간을 조회 중일 수 있음(위 "스냅샷 데이터 보존" 참고)
 
 ## 라이선스
 
