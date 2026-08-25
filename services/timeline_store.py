@@ -22,15 +22,38 @@ class TimelineStore:
     def _path(self, day: str) -> Path:
         return self._dir / f"{day}.jsonl"
 
-    def append(self, day: str, totals: dict[str, Any]) -> None:
+    def append(
+        self,
+        day: str,
+        totals: dict[str, Any],
+        model_breakdowns: list[dict[str, Any]] | None = None,
+    ) -> None:
         if not totals:
             return
+        # ponytail: model breakdown written on every minute row (not just the day's last one) —
+        # simplest correct option, and history only ever reads the last row of a day anyway.
+        models = [
+            {
+                "modelName": mb["modelName"],
+                "cost": float(mb.get("cost") or 0),
+                "inputTokens": int(mb.get("inputTokens") or 0),
+                "outputTokens": int(mb.get("outputTokens") or 0),
+                "cacheCreationTokens": int(mb.get("cacheCreationTokens") or 0),
+                "cacheReadTokens": int(mb.get("cacheReadTokens") or 0),
+                "costEstimated": bool(mb.get("costEstimated")),
+            }
+            for mb in (model_breakdowns or [])
+            if isinstance(mb, dict) and mb.get("modelName")
+        ]
         row = {
             "ts": datetime.now(KST).isoformat(timespec="seconds"),
             "totalTokens": int(totals.get("totalTokens") or 0),
             "totalCost": float(totals.get("totalCost") or 0),
             "inputTokens": int(totals.get("inputTokens") or 0),
             "outputTokens": int(totals.get("outputTokens") or 0),
+            "cacheCreationTokens": int(totals.get("cacheCreationTokens") or 0),
+            "cacheReadTokens": int(totals.get("cacheReadTokens") or 0),
+            "models": models,
         }
         path = self._path(day)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +72,63 @@ class TimelineStore:
                 if line:
                     rows.append(json.loads(line))
         return rows
+
+    def earliest_day(self) -> str | None:
+        """가장 오래된 스냅샷 파일의 날짜(YYYYMMDD), 없으면 None."""
+        if not self._dir.exists():
+            return None
+        days = [p.stem for p in self._dir.glob("[0-9]" * 8 + ".jsonl")]
+        return min(days) if days else None
+
+    def day_final(self, day: str) -> dict[str, Any] | None:
+        """해당 날짜의 마지막 스냅샷(그 날의 최종 누적치)."""
+        rows = self._sorted_rows(day)
+        return rows[-1][1] if rows else None
+
+    def daily_entry(self, day: str) -> dict[str, Any] | None:
+        """ccusage `daily[]` 항목과 동일한 필드 형태로 변환 (history 캐시 우회용)."""
+        row = self.day_final(day)
+        if row is None:
+            return None
+        models = row.get("models") or []
+        return {
+            "period": day,
+            "totalTokens": int(row.get("totalTokens") or 0),
+            "totalCost": float(row.get("totalCost") or 0),
+            "inputTokens": int(row.get("inputTokens") or 0),
+            "outputTokens": int(row.get("outputTokens") or 0),
+            "cacheCreationTokens": int(row.get("cacheCreationTokens") or 0),
+            "cacheReadTokens": int(row.get("cacheReadTokens") or 0),
+            "modelsUsed": sorted({m["modelName"] for m in models if m.get("modelName")}),
+            "modelBreakdowns": models,
+        }
+
+    def history_from_snapshots(
+        self, since: str, until: str
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """since/until(YYYYMMDD, 포함) 범위를 로컬 스냅샷만으로 구성.
+
+        Returns (daily_entries, missing_days). missing_days가 비어 있어야 range 전체가
+        스냅샷으로 커버된 것 — 하나라도 비면 호출측에서 ccusage로 폴백.
+        """
+        start = datetime.strptime(since, "%Y%m%d")
+        end = datetime.strptime(until, "%Y%m%d")
+        if start > end:
+            # 뒤집힌 범위 — 빈 while 루프로 "missing 없음(=커버됨)"이 되어버리면
+            # 호출측이 합계 0짜리 "ready" 응답을 정상 데이터로 착각한다.
+            return [], [since]
+        entries: list[dict[str, Any]] = []
+        missing: list[str] = []
+        d = start
+        while d <= end:
+            key = d.strftime("%Y%m%d")
+            entry = self.daily_entry(key)
+            if entry is None:
+                missing.append(key)
+            else:
+                entries.append(entry)
+            d += timedelta(days=1)
+        return entries, missing
 
     @staticmethod
     def _parse_ts(row: dict[str, Any]) -> datetime | None:

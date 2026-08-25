@@ -9,7 +9,6 @@ from flask import Flask, render_template
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
-HISTORY_TTL_DEFAULT = int(os.getenv("HISTORY_TTL_SEC", "60"))
 REALTIME_TTL_DEFAULT = int(os.getenv("REALTIME_TTL_SEC", "60"))
 
 
@@ -18,7 +17,6 @@ def index() -> str:
     return render_template(
         "index.html",
         api_base_url=API_BASE_URL,
-        history_ttl_default=HISTORY_TTL_DEFAULT,
         realtime_ttl_default=REALTIME_TTL_DEFAULT,
     )
 

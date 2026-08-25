@@ -24,18 +24,13 @@ def _usd_tickformat(values: list[float]) -> str:
     return "$,.2s"
 
 
-_DTYPE_MAP = {
-    "f8": np.float64,
-    "f4": np.float32,
-    "i4": np.int32,
-    "u4": np.uint32,
-}
-
-
 def _decode_bdata(obj: dict[str, Any]) -> list[Any]:
-    dtype = _DTYPE_MAP.get(obj.get("dtype", "f8"), np.float64)
+    # ponytail: trust numpy's own dtype-string parsing (it already knows every
+    # Plotly-emitted code — i1/i2/i4/i8/u1/u2/u4/u8/f4/f8) instead of a hand-rolled,
+    # necessarily-incomplete lookup table that silently defaulted to float64 and
+    # crashed/corrupted on any dtype it didn't list (e.g. plotly's compact "i2").
     raw = base64.b64decode(obj["bdata"])
-    return np.frombuffer(raw, dtype=dtype).tolist()
+    return np.frombuffer(raw, dtype=np.dtype(obj.get("dtype", "f8"))).tolist()
 
 
 def _coerce_plotly_arrays(node: Any) -> Any:

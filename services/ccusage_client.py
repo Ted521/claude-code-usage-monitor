@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 CCUSAGE_TIMEOUT_SEC = 180
+KST = ZoneInfo("Asia/Seoul")
 
 
 def today_yyyymmdd() -> str:
-    return date.today().strftime("%Y%m%d")
+    # 컨테이너는 기본 UTC로 뜨는데(TZ 미설정) 스냅샷 타임스탬프·표시값은 전부 KST 기준이라
+    # "오늘"도 KST로 계산해야 함 — 안 그러면 KST 00:00~09:00 사이 스냅샷이 전날 파일에 쌓인다.
+    return datetime.now(KST).strftime("%Y%m%d")
 
 
 def run_ccusage_json(subcommand: str, extra_args: list[str] | None = None) -> dict:

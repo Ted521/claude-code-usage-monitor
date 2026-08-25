@@ -3,12 +3,10 @@
   const API = cfg.apiBaseUrl;
 
   let activeView = "history";
-  let historyTimer = null;
   let realtimeTimer = null;
   let pollTimer = null;
   let lastHistoryJson = null;
   let lastRealtimeJson = null;
-  let historyForce = false;
   let realtimeForce = false;
   let historyFetchGen = 0;
 
@@ -133,23 +131,6 @@
     return rect.width > 0 && rect.height > 0;
   }
 
-  function historyChartsPresent(charts) {
-    if (!charts) return false;
-    for (const key of ["cost_tokens", "input_output", "model_cost"]) {
-      const fig = charts[key];
-      if (fig?.data?.length) return true;
-    }
-    return false;
-  }
-
-  function setChartLoading(elId, message) {
-    const el = document.getElementById(elId);
-    if (!el) return;
-    if (el.classList?.contains("js-plotly-plot")) return;
-    pendingPlots.delete(elId);
-    el.innerHTML = `<p class="meta chart-loading">${message || "Loading chart…"}</p>`;
-  }
-
   function plotHistory(elId, figJson) {
     const el = document.getElementById(elId);
     if (!el) return;
@@ -177,7 +158,7 @@
       });
   }
 
-  function applyHistoryCharts(charts, loading) {
+  function applyHistoryCharts(charts) {
     const c = charts || {};
     const specs = [
       ["chart-cost-tokens", c.cost_tokens],
@@ -185,13 +166,7 @@
       ["chart-model-cost", c.model_cost],
     ];
     for (const [elId, fig] of specs) {
-      if (fig?.data?.length) {
-        plotHistory(elId, fig);
-      } else if (loading) {
-        setChartLoading(elId);
-      } else {
-        plotHistory(elId, null);
-      }
+      plotHistory(elId, fig?.data?.length ? fig : null);
     }
   }
 
@@ -420,7 +395,6 @@
   }
 
   function applyHistory(payload) {
-    const prev = lastHistoryJson;
     lastHistoryJson = payload;
 
     const est = payload.local_cost_estimate;
@@ -428,36 +402,21 @@
       ? ` · local cost est. Sonnet×${Math.round((est.ratio ?? 0.5) * 100)}%`
       : "";
     $("#history-meta").textContent = payload.updated_at
-      ? `Last updated: ${fmtUpdatedAt(payload.updated_at)} · Status: ${payload.status}${estNote}`
-      : `Status: ${payload.status}${estNote}`;
-
-    if (payload.status === "loading") {
-      showBanner("🔄 Loading history data… (you can keep using the page)");
-    } else {
-      hideBanner();
-    }
+      ? `Last updated: ${fmtUpdatedAt(payload.updated_at)}${estNote}`
+      : "—";
+    hideBanner();
 
     const charts = payload.charts || {};
-    const hasCharts = historyChartsPresent(charts);
-    const loading = payload.status === "loading";
 
-    if (payload.status === "error" && !payload.daily?.length && !hasCharts) {
+    if (payload.status === "error") {
       $("#history-metrics").innerHTML = `<p class="meta">${payload.error}</p>`;
       plotHistory("chart-cost-tokens", null);
       plotHistory("chart-io", null);
       plotHistory("chart-model-cost", null);
+      renderTable("history-table", []);
+      renderTable("models-detail-table", []);
       return;
     }
-    if (payload.status === "error" && payload.daily?.length) {
-      toast("Refresh failed — showing previous data");
-    } else if (
-      payload.status === "ready" &&
-      prev?.status === "loading" &&
-      historyForce
-    ) {
-      toast("Usage data updated");
-    }
-    historyForce = false;
 
     const totals = payload.totals || {};
     renderMetrics("history-metrics", [
@@ -468,7 +427,7 @@
       { label: "Cache Read", value: fmtNum(totals.cacheReadTokens) },
     ]);
 
-    applyHistoryCharts(charts, loading && !hasCharts);
+    applyHistoryCharts(charts);
     renderTable("history-table", payload.table || []);
     renderTable("models-detail-table", payload.models || []);
     scheduleFlushPlots();
@@ -701,8 +660,6 @@
     const until = untilParam();
     if (since) params.set("since", since);
     if (until) params.set("until", until);
-    params.set("ttl", $("#history-ttl").value);
-    if (historyForce) params.set("force", "true");
     try {
       const data = await apiGet(`/api/v1/usage/history?${params}`);
       if (gen !== historyFetchGen) return;
@@ -725,14 +682,6 @@
     }
   }
 
-  function scheduleHistory() {
-    clearInterval(historyTimer);
-    const ttl = parseInt($("#history-ttl").value, 10) * 1000;
-    historyTimer = setInterval(() => {
-      if (activeView === "history") fetchHistory();
-    }, ttl);
-  }
-
   function scheduleRealtime() {
     clearInterval(realtimeTimer);
     realtimeTimer = setInterval(() => {
@@ -740,13 +689,13 @@
     }, cfg.realtimeIntervalMs);
   }
 
+  // ponytail: history has no auto-refresh — one fetch per tab-open/date-change/Refresh click.
+  // Realtime keeps polling while "loading" since that page is meant to auto-update.
   function startPoll() {
     clearInterval(pollTimer);
     pollTimer = setInterval(() => {
-      if (activeView === "history") {
-        if (lastHistoryJson?.status === "loading") fetchHistory();
-      } else if (activeView === "realtime") {
-        if (lastRealtimeJson?.status === "loading") fetchRealtime();
+      if (activeView === "realtime" && lastRealtimeJson?.status === "loading") {
+        fetchRealtime();
       }
     }, cfg.pollMs);
   }
@@ -759,7 +708,6 @@
     hideBanner();
     if (view === "history") {
       fetchHistory();
-      scheduleHistory();
       scheduleFlushPlots();
     } else {
       fetchRealtime();
@@ -806,10 +754,7 @@
   let historyDateTimer = null;
   function scheduleHistoryFromDates() {
     clearTimeout(historyDateTimer);
-    historyDateTimer = setTimeout(() => {
-      historyForce = true;
-      fetchHistory();
-    }, 400);
+    historyDateTimer = setTimeout(fetchHistory, 400);
   }
 
   function init() {
@@ -820,16 +765,11 @@
       btn.addEventListener("click", () => setView(btn.dataset.view));
     });
 
-    $("#btn-history-refresh").addEventListener("click", () => {
-      historyForce = true;
-      fetchHistory();
-    });
+    $("#btn-history-refresh").addEventListener("click", fetchHistory);
     $("#btn-realtime-refresh").addEventListener("click", () => {
       realtimeForce = true;
       fetchRealtime();
     });
-
-    $("#history-ttl").addEventListener("change", scheduleHistory);
 
     document.addEventListener("click", onSortableTableHeaderClick);
 

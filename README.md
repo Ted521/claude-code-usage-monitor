@@ -89,7 +89,6 @@ cd web && python app.py
 | `API_PORT` | API 호스트 포트 | `8000` |
 | `CORS_ORIGINS` | 미설정 시 `http://localhost:<WEB_PORT>` 자동 | — |
 | `API_BASE_URL` | 미설정 시 `http://localhost:<API_PORT>` 자동 | — |
-| `HISTORY_TTL_SEC` | 기록 API 캐시 TTL(초) | `60` |
 | `REALTIME_TTL_SEC` | 실시간 API 캐시 TTL(초) | `60` |
 | `MINUTE_SNAPSHOT_ENABLED` | 분 단위 오늘 스냅샷 (시간별 차트) | `true` |
 | `MINUTE_SNAPSHOT_INTERVAL_SEC` | 스냅샷 주기(초), 최소 30 | `60` |
@@ -123,7 +122,7 @@ docker run --rm -v claude_check_usage-timeline:/from -v "%cd%/data/timeline":/to
 ## API
 
 - `GET /health`
-- `GET /api/v1/usage/history?since=&until=&force=&ttl=`
+- `GET /api/v1/usage/history?since=&until=` — 로컬 `data/timeline` 스냅샷만 읽음(ccusage 미호출), 매번 즉시 응답
 - `GET /api/v1/usage/realtime?force=&ttl=`
 
 응답 `status`: `loading` | `ready` | `error` — 프론트는 `loading` 시 주기적으로 재요청합니다.

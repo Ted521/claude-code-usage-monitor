@@ -28,7 +28,9 @@ def _tick() -> None:
         data = fetch_daily(since=today, until=today)
         totals = data.get("totals") or {}
         if totals:
-            timeline_store.append(today, totals)
+            daily_list = data.get("daily") or []
+            models = daily_list[0].get("modelBreakdowns") if daily_list else None
+            timeline_store.append(today, totals, models)
     except Exception as ex:
         log.warning("minute snapshot failed: %s", ex)
 

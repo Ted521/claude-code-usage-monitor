@@ -98,28 +98,36 @@ def apply_half_claude_estimate(daily_payload: dict[str, Any]) -> dict[str, Any]:
         day["totalCost"] = day_cost
 
     if any_estimated:
-        totals = {
-            "totalTokens": 0,
-            "totalCost": 0.0,
-            "inputTokens": 0,
-            "outputTokens": 0,
-            "cacheCreationTokens": 0,
-            "cacheReadTokens": 0,
-        }
-        for day in daily:
-            if not isinstance(day, dict):
-                continue
-            totals["totalTokens"] += int(day.get("totalTokens") or 0)
-            totals["totalCost"] += float(day.get("totalCost") or 0)
-            totals["inputTokens"] += int(day.get("inputTokens") or 0)
-            totals["outputTokens"] += int(day.get("outputTokens") or 0)
-            totals["cacheCreationTokens"] += int(day.get("cacheCreationTokens") or 0)
-            totals["cacheReadTokens"] += int(day.get("cacheReadTokens") or 0)
-        daily_payload["totals"] = totals
-        daily_payload["localCostEstimate"] = {
-            "enabled": True,
-            "ratio": ratio,
-            "reference": "claude-sonnet-class USD/M tokens",
-        }
+        daily_payload["totals"] = sum_daily_totals(daily)
+        daily_payload["localCostEstimate"] = estimate_meta()
 
     return daily_payload
+
+
+def sum_daily_totals(daily: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = {
+        "totalTokens": 0,
+        "totalCost": 0.0,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheCreationTokens": 0,
+        "cacheReadTokens": 0,
+    }
+    for day in daily:
+        if not isinstance(day, dict):
+            continue
+        totals["totalTokens"] += int(day.get("totalTokens") or 0)
+        totals["totalCost"] += float(day.get("totalCost") or 0)
+        totals["inputTokens"] += int(day.get("inputTokens") or 0)
+        totals["outputTokens"] += int(day.get("outputTokens") or 0)
+        totals["cacheCreationTokens"] += int(day.get("cacheCreationTokens") or 0)
+        totals["cacheReadTokens"] += int(day.get("cacheReadTokens") or 0)
+    return totals
+
+
+def estimate_meta() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "ratio": _ratio(),
+        "reference": "claude-sonnet-class USD/M tokens",
+    }
